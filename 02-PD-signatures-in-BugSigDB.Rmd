@@ -1,0 +1,225 @@
+---
+title: "PD signatures in BugSigDB"
+author: "Giacomo Antonello"
+date: "`r date()`"
+graphics: yes
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    code_folding: hide
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    thumbnails: false
+    lightbox: true
+    gallery: false
+    use_bookdown: true
+    highlight: haddock
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warnings = FALSE,
+  message = FALSE)
+```
+
+```{r}
+# data manipulation packages
+library(tidyverse)
+library(magrittr)
+
+# table visualization packages
+library(reactable)
+library(kableExtra)
+
+# data visualization packages
+library(pheatmap)
+library(ggpubr)
+library(plotly)
+
+# bugSigDB packages for literature review
+library(bugsigdbr)
+library(bugSigSimple)
+library(BugSigDBStats)
+
+```
+
+# PD signatures in `BugSigDB`
+
+## All sequencing methods 
+
+We first summarize bacterial signatures found in previous literature. To ensure
+reproducibility, we will use bacterial signatures (meaning differentially 
+abundant taxa) for Parkinson's Disease found in the BugSigDB resource.
+
+```{r, echo=TRUE}
+# define query
+condition_of_interest <- "Parkinson disease"
+efo_id <- "MONDO:0005180" 
+host <- "Homo sapiens"
+seq_type <- "WMS" # stands for whole metagenome sequencing. Aka shotgun
+
+cbind(c("Condition", "EFO ID", "Host species", "Sequencing type"), c(condition_of_interest, efo_id, host, seq_type)) %>% 
+  set_colnames(c("Parameter", "Value")) %>% 
+  kbl() %>% 
+  kable_styling()
+```
+
+Table below: Overview of ALL studies related to Parkinson in BugSigDB. The 
+table has been sorted to show shotgun studies on top. Notice they are the
+vast minority of all studies.
+
+```{r}
+
+bsdb <- importBugSigDB(cache=FALSE)
+
+bsdb_PD_signatures_allMethods <- filter(bsdb, 
+       # get studies/signatures on Parkinson alone
+       grepl(efo_id, `EFO ID`),
+       # restrict search to Homo sapiens
+       `Host species` == "Homo sapiens"
+       )
+
+tmp <- bsdb_PD_signatures_allMethods %>% 
+  mutate(
+    FirstAuthor = str_split(`Authors list`, pattern = ", ") %>% sapply("[[", 1),
+    `Study Code` = paste(gsub(" ", "", FirstAuthor, fixed = T), Year, sep = "_"), 
+    Cases = `Group 1 sample size`,
+    Controls = `Group 0 sample size`
+    ) %>% 
+  select(
+    `Study Code`,
+    Condition,
+    Cases, 
+    Controls, 
+    `Study design`,
+    `Sequencing type`,
+    `Location of subjects`,
+    PMID, 
+    DOI
+  ) %>% 
+  distinct() %>% 
+  arrange(desc(`Sequencing type`))
+
+tmp %>% 
+  reactable(filterable = TRUE)
+```
+
+Some studies appear more than once because curators have reported more than 
+one experiment. This is the case for Rosario and Boktor, for 2 different reasons:
+
+  1. Rosario test PD vs health ctrl and then against diseased controls
+  
+  2. Boktor actually uses two datasets, later deposited separately
+
+```{r}
+bsdb_PD_signatures_splitMethods <- split.data.frame(bsdb_PD_signatures_allMethods, bsdb_PD_signatures_allMethods$`Sequencing type`)
+
+some_stats.mxt <- cbind(
+  sapply(bsdb_PD_signatures_splitMethods, nrow), 
+  t(sapply(bsdb_PD_signatures_splitMethods, function(x) table(x$`Abundance in Group 1`, useNA = "always")))
+  ) %>% 
+  set_colnames(c("Total Signatures", "Decreased in PD", "Increased in PD", "NA"))
+
+caption <- paste0("Summary table of BugSigDB signatures reported for EFO mondo with code ", efo_id, ". Signatures were split by sequencing method in rows. Date of analysis: ", Sys.Date(), ", bugsigdbr package version: ", packageVersion("bugsigdbr"))
+
+kbl(some_stats.mxt, caption = caption) %>% 
+  kable_styling()
+```
+
+```{r}
+createTaxonTable(bsdb_PD_signatures_allMethods, n = 20) %>% 
+  kbl(caption = "List of top 20 signatures found in all Parkinson studies regardless of the sequencing technique. The table was generated with bugSigSimple::createTaxonTable") %>% 
+  kable_styling()
+```
+
+## Shotgun studies only
+
+We are mostly interested in shotgun sequencing studies, as they are more 
+comparable across studies.
+
+```{r}
+tmp %>% 
+  filter(`Sequencing type` == "WMS") %>% 
+  reactable(filterable = TRUE)
+```
+
+```{r}
+createTaxonTable(bsdb_PD_signatures_splitMethods$WMS, n= 20) %>% 
+  kbl() %>% 
+  kable_styling()
+```
+
+```{r}
+
+tmp <- bsdb_PD_signatures_splitMethods$WMS %>% 
+  mutate(signatureSplit = paste(`MetaPhlAn taxon names`, collapse = ";")) %>% 
+  separate_rows(`MetaPhlAn taxon names`, sep = ";") %>% 
+  mutate(
+    incr_decr = case_when(
+      `Abundance in Group 1` == "increased" ~ 1,
+      `Abundance in Group 1` == "decreased" ~  - 1,
+      TRUE ~ 0
+      ),
+    FirstAuth = str_split(`Authors list`, pattern = ", ") %>% sapply("[[", 1)) %>% 
+  rename(taxaNames = `MetaPhlAn taxon names`) %>% 
+  select(taxaNames, FirstAuth, incr_decr) %>% 
+  distinct()
+
+#' Manually remove Clostridiaceae family increase in Rosario D, which 
+#' causes a conflict AND is only found increased in PD, in the paper
+tmp %<>% 
+  filter(!(FirstAuth == "Rosario D" & incr_decr == -1 & grepl("Clostridiaceae", taxaNames)))
+
+tmp_wide <- pivot_wider(tmp, names_from = "FirstAuth", values_from = "incr_decr") %>% 
+  column_to_rownames("taxaNames")
+
+rownames(tmp_wide) <- str_split(rownames(tmp_wide), "\\|") %>% sapply(function(x) x[length(x)])
+
+tmp_wide[is.na(tmp_wide)] <- 0
+
+tmp_wide %>% 
+pheatmap(legend_breaks = c(-1, 0, 1), legend_labels = c("Decreased", "NA/Unchanged", "Increased"), angle_col = 315)
+
+```
+
+
+Heatmap of signatures in the same direction in at least 2 studies
+
+```{r}
+tmp_wide[rowSums(abs(tmp_wide)) > 2,] %>% 
+pheatmap(legend_breaks = c(-1, 0, 1), legend_labels = c("Decreased", "NA/Unchanged", "Increased"), angle_col = 315)
+```
+
+As can be seen, most signatures are unique to the study. This is due to the typical
+sources of variability in studies, that include, among all:
+
+  1. Data generation steps 
+    
+    * sample collection
+    
+    * DNA extraction
+    
+    * Sequencing platform
+  
+  2. Data processing steps
+    
+    * Fastq filtering
+    
+    * Fastq trimming
+    
+    * profiling methods
+  
+  3. Analysis choices
+    
+    * Prevalence/abundance cutoff
+    
+    * Data transformation/scaling/normalization
+    
+    * Model assumptions
+    
+    * Covariate adjustment
+
+Our meta-analysis will aim to minimize the effect of steps 2 and 3. Adjusting 
+for DNA extraction and sequencing method could help minimizing that bias too.
+
