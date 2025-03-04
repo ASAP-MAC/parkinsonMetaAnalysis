@@ -1,0 +1,480 @@
+---
+title: "PD meta analysis"
+author: "Giacomo Antonello"
+date: "`r date()`"
+graphics: yes
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    code_folding: hide
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    thumbnails: false
+    lightbox: true
+    gallery: false
+    use_bookdown: true
+    highlight: haddock
+---
+
+```{r}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+```{r}
+library(mia)
+library(magrittr)
+
+library(ggpubr)
+library(meta)
+
+library(kableExtra)
+
+# personal data libraries
+# devtools::install_github("g-antonello/biobakeryUtils")
+library(biobakeryUtils)
+source("R/lm_standardization_utility_functions.R")
+```
+
+# Introduction
+
+Studies included in the meta-analysis are the following:
+
+```{r}
+read_tsv("https://raw.githubusercontent.com/ASAP-MAC/parkinsonsMetagenomicData/refs/heads/main/shotgun_samples/processed_datasets.tsv")[,1:5] %>% 
+  relocate(`doi.org link`, .after = `Sequence Acc. code`) %>% 
+  kbl(
+    caption = paste("List of studies included in the meta-analysis so far.",
+    "Analysis date:", 
+    Sys.Date())) %>%
+  kable_styling()
+```
+
+```{r load metadata table}
+metadata_all_studies.df <- read_csv("https://raw.githubusercontent.com/ASAP-MAC/parkinsonsMetagenomicData/refs/heads/main/shotgun_samples/merged_metadata.csv") %>% 
+  relocate(uuid) %>% 
+  as.data.frame()
+rownames(metadata_all_studies.df) <- metadata_all_studies.df$uuid
+```
+
+## IMPORTANT: Some exceptions that should be resolved in the source data
+
+```{r metadata exceptions}
+# Exception 1 - Exclude BLANK and MSA samples (BedarfJC_2023)
+
+metadata_all_studies.df %<>% filter(!grepl("BLANK", sample_id))
+metadata_all_studies.df %<>% filter(!grepl("MSA", sample_id))
+
+# Exception 2 - create Healthy label to MaoL_2021
+metadata_all_studies.df$disease[metadata_all_studies.df$study_name == "MaoL_2021" & is.na(metadata_all_studies.df$disease)] <- "Healthy"
+```
+
+```{r load microbiome counts table}
+microbiome_tables_all_studies.df <- read_tsv("Data/merged_unknown.tsv", skip = 1) %>% 
+  wrangle_metaphlan(taxonomic_lvl = "Species")
+```
+
+```{r report failed or otherwise missing samples}
+samples_intersection <- intersect(rownames(metadata_all_studies.df), colnames(microbiome_tables_all_studies.df$profiles))
+
+filter(metadata_all_studies.df, !(uuid %in% samples_intersection))[,1:4] %>% 
+  mutate(rowCount = 1:nrow(.), .before = uuid) %>% 
+  as_tibble() %>% 
+  kbl() %>% 
+  kable_styling()
+```
+
+
+```{r create Summarized Experiment object}
+metadata_removedFailedSamples <- metadata_all_studies.df[samples_intersection,]
+profiles_removedFailedSamples <- microbiome_tables_all_studies.df$profiles[,samples_intersection]
+  
+microbiome_PD_data.se <- SummarizedExperiment(
+  assays = list(
+    "metaphlan_percentages" = as.matrix(profiles_removedFailedSamples),
+    "metaphlan_proportions" = as.matrix(profiles_removedFailedSamples/100),
+    "metaphlan_asinSqrt" = asin(sqrt(as.matrix(profiles_removedFailedSamples/100)))
+    ),
+  rowData = microbiome_tables_all_studies.df$taxonomies, 
+  colData = metadata_removedFailedSamples)
+
+microbiome_PD_data.se
+```
+
+# Perform meta-analysis as 'traditionally done' 
+
+This restricts our analyses to cases where we have case-controls for 
+differential abundance analysis on binary data.
+
+```{r}
+cases_ctrls_vs_study_name <- colData(microbiome_PD_data.se) %>% 
+  as.data.frame() %>% 
+  split.data.frame(.$study_name) %>% 
+  lapply(function(x) as.data.frame(table(x$disease, useNA = "always"))) %>% 
+  bind_rows(.id = "study_name")
+  
+
+cases_ctrls_vs_study_name_wider <- cases_ctrls_vs_study_name %>% 
+  pivot_wider(names_from = Var1, values_from = Freq, values_fill = 0)
+
+studies_with_enough_cases_ctrls <- cases_ctrls_vs_study_name_wider$study_name[cases_ctrls_vs_study_name_wider$Healthy >= 10 & cases_ctrls_vs_study_name_wider$`Parkinson disease` >= 10]
+
+cases_ctrls_vs_study_name_wider %>% 
+  kbl() %>% 
+  kable_styling()
+
+```
+
+Based on vignette in [curatedMetagenomicDataAnalyses](https://github.com/waldronlab/curatedMetagenomicDataAnalyses/blob/main/vignettes/Sex_metaanalysis_vignette.Rmd)
+
+## Defining functions used to perform the analysis
+These functions will be used to compute the standardized difference (d) from the t-value of linear models, the respective Standard Error ($SE_d$)
+and transform relative abundance data.
+
+```{r}
+#Compute Standardized Difference (d) from t-value
+d_fromlm <- function(n1,n2,t) {
+  d <- (t*(n1+n2)/(sqrt(n1*n2)*sqrt(n1+n2-2)))
+  return(d)
+}
+
+#Compute Std. error of d
+SE_d <- function(n1,n2,d) {
+  se_d <- sqrt(((n1+n2-1)/(n1+n2-3))*((4/(n1+n2))*(1+((d**2)/8))))
+  return(se_d)
+}
+```
+
+We define another function to transform the data with the $arcsin(\sqrt{\frac{RelAb}{100}})$ of the corresponding proportions.
+```{r}
+#Transform relative abundances
+asin_trans <- function(rel_ab){
+  return(asin(sqrt(rel_ab/100)))
+}
+```
+
+In order to proceed with the meta-analysis, we have to compute an effect-size for each population.
+Each dataset effect-size is computed with the function we define after. This function estimates a per-feature relationship between the sex (encoded here as a binary variable) and the arcsin-square-root relative abundance of each species. The estimates is extracted by an Ordinary Least Squares (OLS) model, in which the microbial feature (in this case, the species) is the response, and the sex is the predictor. Using this method we can control our model by age & by BMI of the patient. 
+
+The model has indeed the shape:
+
+$$ species \sim  sex + age + BMI$$
+
+
+
+Weighted effect-size of sex in this model is computed as:
+
+$$\text{effect-size} = \frac{t\cdot (n1+n2)}{\sqrt{n1\cdot n2}\cdot \sqrt{df}}$$
+
+where:
+
+  - $n1$ is the total number of controls (females) in the corresponding dataset
+  - $n2$ is the total number of cases (males) in the corresponding dataset
+  - $df$ are the degrees of freedom, computed as $df=n1 + n2 - 2$ are the degrees of freedom of the linear model built
+  - $t$ is the T-statistics for sex returned by the software  
+
+
+The computed Effect-size (corrected by covariates) has Standard Error and Variance:
+
+$$SE =\sqrt{\frac{n1+n2-1}{n1+n2-3}\cdot\frac{4}{n1+n2}\cdot(1+\frac{\text{effect-size}^2}{8})}$$
+
+```{r message=FALSE}
+#Function that takes in input a tse object and for each dataset computes a linear model for each linear species
+computeStandardizedMeanDifference <- function(tse_object){
+  
+  tse_datasets <- unique(colData(tse_object)$study_name)
+  
+  #Build linear models for all species of each dataset present in tse_object
+  singleDatasetAnalyze <- function(dataset) {
+    
+    single_dataset_tse <- tse_object[,tse_object$study_name == dataset]
+
+    #Select vectors of relative abundances and metadata
+    exprs_df <- asin_trans(
+      assay(single_dataset_tse))
+    
+    exprs_df <- exprs_df[rowSums(is.na(exprs_df)) != ncol(exprs_df), ]
+
+    species <- rownames(exprs_df)
+    
+    disease <- colData(single_dataset_tse)$disease
+   
+    compute_lm <- function(exprs_row){
+      lm_res <-  broom::tidy(lm(exprs_row ~ disease))
+      lm_res <- column_to_rownames(lm_res, var = "term")
+      res <- lm_res["diseaseParkinson disease",c("statistic","p.value"),drop=TRUE]
+      return(res)
+    }
+
+    lmResults <- t(
+      sapply(species, 
+            FUN = function(x) {
+              species_relabs <- exprs_df[x,] 
+              res <- compute_lm(species_relabs)
+              return(res)
+                        }))
+
+    n_case_ctrl <- c(table(disease)["Healthy"][[1]],
+                  table(disease)["Parkinson disease"][[1]])
+    
+    #Compute effect size and respective standard error for each species
+    #in single dataset
+    
+    d_List <- as.vector(sapply(lmResults[,"statistic"], function(x) d_fromlm(n_case_ctrl[1],
+                                                                   n_case_ctrl[2], 
+                                                                   x)))
+    
+    SE_d_List <- as.vector(sapply(d_List, function(x) SE_d(n_case_ctrl[1],
+                                                           n_case_ctrl[2],
+                                                           x )))
+    
+    #Wald test for relative abundance of species between males and females
+    #(default of lm() function)
+    wald_list <- as.double(lmResults[,"p.value", drop=TRUE])
+    
+    #FDR-correction with Benjamini-Hochberg method for Wald p-values
+    q_values <- p.adjust(wald_list,method = "BH")
+    
+    
+    tmp_df <- as.matrix(cbind(d_List,
+                                SE_d_List,
+                                wald_list,
+                                q_values))
+    
+    #Finalize results for the single dataset
+    colnames(tmp_df) <- c(paste0(dataset,"_CohenD"),
+                            paste0(dataset,"_SE_d"),
+                            paste0(dataset,"_pvalue"),
+                            paste0(dataset,"_Qvalue"))
+    
+    rownames(tmp_df) <- species
+
+    return(tmp_df)
+  
+  }
+  
+    linear_models <- lapply(tse_datasets, singleDatasetAnalyze)
+    names(linear_models) <- tse_datasets
+    
+    return(linear_models)
+
+} 
+```
+
+Now that we have computed effect-sizes for each population, we can meta-analyze each microbial feature. In order to do this, we define a function applying the _metagen_ function from the package `r  BiocStyle::CRANpkg("metafor")`.
+
+```{r}
+runMetaanalysis <- function(d_vector, SE_d_vector) {
+  a <- meta::metagen(TE=d_vector,
+                     seTE=SE_d_vector,
+                     studlab=rownames(d_vector),
+                     method.tau="PM",          
+                     sm="SMD")
+  
+  final_vector <-c(a$TE.random,
+                   a$seTE.random,
+                   paste(a$lower.random,a$upper.random,sep=";"),
+                   a$zval.random,
+                   a$pval.random,
+                   a$tau2,
+                   a$I2)
+  
+  names(final_vector) <- c("RE","SE_RE","CI_RE","Zscore","p-value","tau2","I^2")
+  return(final_vector)
+}
+```
+
+```{r}
+#Computing Standardized Mean Differences (d), and the respective standard error
+#(SE_D) of species relative abundances between males and female for all datasets 
+
+species_tse <-microbiome_PD_data.se[,colData(microbiome_PD_data.se)$study_name %in% studies_with_enough_cases_ctrls]
+
+SDM <- computeStandardizedMeanDifference(species_tse)  
+
+#Merging outputs of all datasets so to have a single dataframe with all the 
+#species found across the cohorts
+tmp_df <- Reduce(function(x, y) merge(x, y, all=TRUE), 
+                   lapply(SDM, function(x) data.frame(x, rn = row.names(x))))
+
+tmp_df <- tmp_df  %>% column_to_rownames(var="rn")
+
+#Subsetting from SDM dataframe only the columns we actually need to perform 
+#the meta-analysis into two separated dataframes (one for the standardized mean
+#differences (d), and one for the respective standard error (SE_D)
+
+d_matrix <- tmp_df %>% 
+  select(contains("CohenD"))
+d_matrix <- t(d_matrix)
+se_matrix <- tmp_df %>% 
+  select(contains("SE_d"))
+se_matrix <- t(se_matrix)
+
+#Run meta-analyses
+meta_analysis_regression <- t(mapply(function(x,y) {runMetaanalysis(x,y)},
+                                                   as.data.frame(d_matrix),
+                                                   as.data.frame(se_matrix)))
+
+
+tmp_df <- cbind(tmp_df, meta_analysis_regression)
+
+#Correct p-values of random effect with FDR Benjamini-Hochberg
+tmp_df$FDR_Qvalue <- p.adjust(tmp_df$`p-value`,method = "BH")
+```
+
+```{r, echo=FALSE, message=FALSE}
+filter_sort <- function(df_to_sort, na_filter){
+  cols_cohenD <- grep("CohenD|Correlation",colnames(df_to_sort))
+  cols_cohenD <- cols_cohenD[which(cols_cohenD >= 9)]
+  df_to_sort$na_n <- apply(df_to_sort[,cols_cohenD], MARGIN = 1, FUN = function(x){
+     na_n <- sum(!is.na(x))
+   })
+  
+  df_to_sort <- df_to_sort[which(df_to_sort$na_n >= na_filter),]
+  df_to_sort$RE_correlation_ABS <- abs(as.double(df_to_sort[,1]))
+  df_to_sort$lower_than_fdr <- ifelse(df_to_sort$FDR_Qvalue < 0.2, 1, 0)
+  
+  #Split the dataset
+  df_to_sort_lower_fdr <- df_to_sort[which(df_to_sort$lower_than_fdr == 1),]
+  df_to_sort_upper_fdr <- df_to_sort[which(df_to_sort$lower_than_fdr == 0),]
+
+  #Sort according to ABS.re
+  df_to_sort_lower_fdr <- df_to_sort_lower_fdr %>% 
+    arrange(-RE_correlation_ABS)
+  
+  df_to_sort_upper_fdr <- df_to_sort_upper_fdr %>% 
+    arrange( -RE_correlation_ABS)
+  
+  df_to_sort <- rbind(df_to_sort_lower_fdr, df_to_sort_upper_fdr)
+  df_to_sort <- df_to_sort %>% 
+    select(-c(na_n, lower_than_fdr,RE_correlation_ABS))
+  
+  return(df_to_sort)
+}
+
+tmp_df_filtered <- tmp_df %>% 
+  dplyr::select(RE:FDR_Qvalue,everything()) %>% 
+  filter(complete.cases(.))
+
+final_df <- filter_sort(tmp_df_filtered, 4) %>% 
+  rownames_to_column("FeatureID") %>% 
+  separate_wider_delim(cols = "CI_RE", names = c("CI_RE_lower", "CI_RE_upper"), delim = ";") %>% 
+  column_to_rownames("FeatureID") %>% 
+  mutate_all(.funs = as.numeric) %>% 
+  rownames_to_column("FeatureID")
+```
+
+```{r}
+topFeatures.N <- 10
+
+topN_bottomN_All.df <- rbind.data.frame(
+  arrange(final_df, desc(RE)) %>% head(topFeatures.N),
+  arrange(final_df, RE) %>% head(topFeatures.N)
+  ) %>% arrange(RE) %>% 
+  mutate(FeatureID = gsub("_", " ", substr(FeatureID, 4, nchar(FeatureID))))
+
+per_study_data_for_plot <- reshape2::melt(
+  topN_bottomN_All.df[, c(1,11:ncol(topN_bottomN_All.df))]
+  ) %>% 
+  separate_wider_delim(
+    cols = variable, 
+    delim = "_", 
+    names = c("Author", "Year", "meta_analysis_variable"), 
+    too_many = "drop"
+    ) %>% 
+  # don't know why but rows get duplicated, we must remove them
+  distinct() %>%
+  # re-create columns with p-values, standard errors and so on
+  pivot_wider(names_from = "meta_analysis_variable", values_from = "value") %>% 
+  mutate(FeatureID = factor(FeatureID, levels = topN_bottomN_All.df$FeatureID))
+
+
+forest_plot <- ggplot() +
+  geom_vline(xintercept = 0, lty = "dashed") + 
+  geom_errorbar(data = topN_bottomN_All.df, mapping = aes(x = RE, y = FeatureID, xmin = RE - SE_RE, xmax = RE + SE_RE), color = "#cf2fb3", width = 0.1) +
+  geom_point(data = topN_bottomN_All.df, mapping = aes(x = RE, y = FeatureID), size = 3, color = "#cf2fb3") +
+  geom_point(data = per_study_data_for_plot, mapping = aes(x = CohenD, y = FeatureID, shape = paste(Author, Year, sep = "_")), alpha = 0.8) +
+  theme_light() +
+  theme(axis.text.y = element_text(face = "italic")) + 
+  labs(
+    x = "Standardized Effect Size (Cohen D)", 
+    y = "Species", 
+    shape = "Dataset"
+    )
+
+ggsave(plot = forest_plot, filename = "Figures/PD_meta-analysis_ForestPlot.png", bg = "transparent", height = 5, width = 7)
+
+forest_plot
+```
+
+
+# My re-implementation (to be finalized)
+
+```{r asinh transformation}
+meta_analysis_basic <- mia::meltSE(microbiome_PD_data.se, assay.type = "metaphlan_asinSqrt", add.col = c("study_name", "disease")) %>% 
+  filter(study_name %in% studies_with_enough_cases_ctrls, 
+         complete.cases(.)) %>% 
+  group_by(study_name, FeatureID) %>% 
+  group_modify(~ {
+    # Apply linear model for each group and tidy the output
+    lm_results <- lm(metaphlan_asinSqrt ~ disease, data = .x)
+    
+    ctrls.N <- table(.x$disease) %>% .[names(.) == "Healthy"]
+    cases.N <- table(.x$disease) %>% .[names(.) != "Healthy"]
+    
+    return(broom::tidy(lm_results) %>% 
+      mutate(cases.N = cases.N, ctrls.N = ctrls.N))
+  }) %>% 
+  group_by(FeatureID) %>% 
+  # Adjust p-values to account for the number of independent tests
+  mutate(
+    q.value = p.adjust(p.value, "BH"),
+    .after = p.value
+  ) %>% 
+  filter(term == "diseaseParkinson disease")
+
+group_by(meta_analysis_basic, study_name) %>% 
+  reframe(Features_not_Estimated = sum(is.na(statistic)), Features_tested_Tot = n()) %>% 
+  kbl() %>% 
+  kable_styling()
+```
+
+```{r calculate Cohen D and SE}
+
+meta_analysis_with_cohenD <- meta_analysis_basic %>% 
+  group_by(FeatureID) %>% 
+  mutate(
+    cohenD = cohen_d_from_lm(n1 = cases.N, n2 = ctrls.N, t = statistic),
+    cohenSE = cohen_d_StdErr(n1 = cases.N, n2 = ctrls.N, d = cohenD)
+  ) %>% 
+  ungroup() %>% 
+  filter(
+    complete.cases(.)
+  )
+
+meta_analysis_with_cohenD
+```
+
+```{r}
+meta_analysis_with_metagen <- meta::metagen(
+  TE = meta_analysis_with_cohenD$cohenD,
+  seTE = meta_analysis_with_cohenD$cohenSE,
+  studlab = meta_analysis_with_cohenD$study_name,
+  method.tau="PM",
+  sm="SMD"
+  )
+
+final_vector <-c(meta_analysis_with_metagen$TE.random,
+                   meta_analysis_with_metagen$seTE.random,
+                   paste(meta_analysis_with_metagen$lower.random,meta_analysis_with_metagen$upper.random,sep=";"),
+                   meta_analysis_with_metagen$zval.random,
+                   meta_analysis_with_metagen$pval.random,
+                   meta_analysis_with_metagen$tau2,
+                   meta_analysis_with_metagen$I2)
+
+final_vector
+```
+

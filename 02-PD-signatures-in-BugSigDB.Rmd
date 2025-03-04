@@ -44,9 +44,7 @@ library(BugSigDBStats)
 
 ```
 
-# PD signatures in `BugSigDB`
-
-## All sequencing methods 
+# PD studies in `BugSigDB`
 
 We first summarize bacterial signatures found in previous literature. To ensure
 reproducibility, we will use bacterial signatures (meaning differentially 
@@ -57,17 +55,19 @@ abundant taxa) for Parkinson's Disease found in the BugSigDB resource.
 condition_of_interest <- "Parkinson disease"
 efo_id <- "MONDO:0005180" 
 host <- "Homo sapiens"
-seq_type <- "WMS" # stands for whole metagenome sequencing. Aka shotgun
 
-cbind(c("Condition", "EFO ID", "Host species", "Sequencing type"), c(condition_of_interest, efo_id, host, seq_type)) %>% 
+
+cbind(c("Condition", "EFO ID", "Host species"), c(condition_of_interest, efo_id, host)) %>% 
   set_colnames(c("Parameter", "Value")) %>% 
   kbl() %>% 
   kable_styling()
 ```
 
 Table below: Overview of ALL studies related to Parkinson in BugSigDB. The 
-table has been sorted to show shotgun studies on top. Notice they are the
-vast minority of all studies.
+table has been sorted to show shotgun studies on top. **Important**: some 
+studies appear more than once because curators have reported more than 
+one experiment, like comparing multiple groups. This implies potentially 
+different cases and controls.
 
 ```{r}
 
@@ -80,56 +80,169 @@ bsdb_PD_signatures_allMethods <- filter(bsdb,
        `Host species` == "Homo sapiens"
        )
 
-tmp <- bsdb_PD_signatures_allMethods %>% 
-  mutate(
-    FirstAuthor = str_split(`Authors list`, pattern = ", ") %>% sapply("[[", 1),
-    `Study Code` = paste(gsub(" ", "", FirstAuthor, fixed = T), Year, sep = "_"), 
-    Cases = `Group 1 sample size`,
-    Controls = `Group 0 sample size`
-    ) %>% 
-  select(
-    `Study Code`,
-    Condition,
-    Cases, 
-    Controls, 
-    `Study design`,
-    `Sequencing type`,
-    `Location of subjects`,
-    PMID, 
-    DOI
-  ) %>% 
-  distinct() %>% 
-  arrange(desc(`Sequencing type`))
 
-tmp %>% 
+# fix typo of feces,blood
+
+bsdb_PD_signatures_allMethods <- mutate(bsdb_PD_signatures_allMethods,
+                                        `Body site` = ifelse(`Body site` == "Feces,Blood", "Blood,Feces"))
+
+source(file = "~/Desktop/bugSigSimple_upgrade.R")
+
+# custom, more expanded createStudyTable function
+studies_table_clean <- createStudyTable2(bsdb_PD_signatures_allMethods, rows_are = "experiments", includeAlso = c("Sequencing type", "Sequencing platform"))
+
+studies_table_clean %>% 
+  reactable(filterable = TRUE, searchable = TRUE)
+```
+
+Below the summary function as currently implemented in bugSigSimple
+
+```{r}
+createStudyTable(bsdb_PD_signatures_allMethods) %>% 
   reactable(filterable = TRUE)
 ```
 
-Some studies appear more than once because curators have reported more than 
-one experiment. This is the case for Rosario and Boktor, for 2 different reasons:
-
-  1. Rosario test PD vs health ctrl and then against diseased controls
-  
-  2. Boktor actually uses two datasets, later deposited separately
+# Some statistics of studies included (For CRN meeting)
 
 ```{r}
-bsdb_PD_signatures_splitMethods <- split.data.frame(bsdb_PD_signatures_allMethods, bsdb_PD_signatures_allMethods$`Sequencing type`)
+# NUmber of studies per year
+
+studies_per_year <- bsdb_PD_signatures_allMethods %>% select(PMID, Year) %>% distinct() %>% .$Year %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Year", "N. Occurrences")) 
+
+years_barplot <- ggplot(studies_per_year, aes(x = Year, y = `N. Occurrences`)) + 
+  geom_col(fill = "#34a270") + 
+  geom_text(data = studies_per_year, mapping = aes(x = Year, y = `N. Occurrences` + 0.2, label = `N. Occurrences`)) + 
+  theme_light() +
+  scale_y_continuous(breaks = 1:10)
+
+ggsave(filename = "~/Desktop/CRN_MEETING/studies_per_year.png", plot =  years_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
+
+# Body sites 
+
+bodySites <- bsdb_PD_signatures_allMethods %>% select(PMID, `Body site`) %>% distinct() %>% mutate(`Body site` = ifelse(`Body site` == "Feces,Blood", "Blood,Feces", `Body site`)) %>% .$`Body site` %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Body Site", "N. Occurrences")) 
+
+bodySite_barplot <- ggplot(bodySites, aes(x = reorder(`Body Site`, - `N. Occurrences`), y = `N. Occurrences`)) + 
+  geom_col(fill = "#cf2fb3") + 
+  geom_text(data = bodySites, mapping = aes(x = reorder(`Body Site`, - `N. Occurrences`), y = `N. Occurrences` + 1.5, label = `N. Occurrences`)) + 
+  theme_light() +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0), axis.title.x = element_blank())
+
+ggsave(filename = "~/Desktop/CRN_MEETING/BodySites.png", plot = bodySite_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
+
+# Census methods 
+
+censusMethods <- bsdb_PD_signatures_allMethods %>% select(PMID, `Sequencing type`) %>% distinct() %>% .$`Sequencing type` %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Census Method", "N. Occurrences")) 
+
+censusMethods_barplot <- ggplot(censusMethods, aes(x = reorder(`Census Method`, - `N. Occurrences`), y = `N. Occurrences`)) + 
+  geom_col(fill = "#0c8dc3") + 
+  geom_text(data = censusMethods, mapping = aes(x = reorder(`Census Method`, - `N. Occurrences`), y = `N. Occurrences` + 1, label = `N. Occurrences`)) + 
+  theme_light() +
+  theme(axis.title.x = element_blank())
+
+ggsave(filename = "~/Desktop/CRN_MEETING/CensusMethods.png", plot = censusMethods_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
+
+ggarrange(
+  ggarrange(years_barplot, censusMethods_barplot,  nrow = 2), 
+  bodySite_barplot, 
+  ncol = 2
+  )
+
+```
+
+# Significant signatures across studies (Binomial test p-value < 0.05)
+
+The function `bugSigSimple::createTaxonTable` generates a list of microbes that 
+are most frequently reported in the papers tested. Next, for each microbe, 
+it counts how many times it was reported to be enriched or depleted across 
+studies. 
+
+To test if a bug is significantly more often reported as increased or decreased,
+a binomial test is run, assuming a 0.5 probability for the null hypothesis. The
+more disproportionate two groups, the more significant the test is. 
+
+## All studies
+
+```{r}
+createTaxonTable(bsdb_PD_signatures_allMethods, Inf) %>% 
+  filter(`Binomial Test pval` < 0.05) %>% 
+  kbl(caption = "Number of significant signatures as found in BugSigDB. Significance is defined as binomial test p-value less than 0.05. Signautres were extracted using bugSigSimple::createTaxonTable") %>% 
+  kable_styling()
+```
+
+## Studies split by `Sequencing type` 
+
+```{r}
+
+signautres_per_body_site <- bsdb_PD_signatures_allMethods %>% 
+  mutate(`Sequencing type` = ifelse(`Sequencing type` == "Feces,Blood", "Blood,Feces", `Sequencing type`)) %>% 
+split.data.frame(f = .$`Sequencing type`) %>% 
+  # in the list of each body site, report all possible signatures
+  lapply(function(x) tryCatch(createTaxonTable(x, n = Inf), error = function(e) return(NULL))) %>% 
+  .[!sapply(., is.null)] %>%
+  lapply(dplyr::filter, `Binomial Test pval` < 0.05)
+
+cbind(names(signautres_per_body_site), sapply(signautres_per_body_site, nrow)) %>% 
+  set_colnames(c("Sequencing type", "Significantly enriched Signatures")) %>% 
+  set_rownames(NULL) %>% 
+  kbl(caption = "Number of significant signatures as found in BugSigDB subdividing studies by sequencing type, or more generally microbial census method (PCR is not sequencing). Significance is defined as binomial test p-value less than 0.05, testing for each  disproportions. Signautres were extracted using bugSigSimple::createTaxonTable") %>% 
+  kable_styling()
+
+```
+
+## Studies spliy by `Body site`
+
+```{r}
+
+signautres_per_body_site <- bsdb_PD_signatures_allMethods %>% 
+  mutate(`Body site` = ifelse(`Body site` == "Feces,Blood", "Blood,Feces", `Body site`)) %>% 
+split.data.frame(f = .$`Body site`) %>% 
+  # in the list of each body site, report all possible signatures
+  lapply(function(x) tryCatch(createTaxonTable(x, n = Inf), error = function(e) return(NULL))) %>% 
+  .[!sapply(., is.null)] %>%
+  lapply(dplyr::filter, `Binomial Test pval` < 0.05)
+
+cbind(names(signautres_per_body_site), sapply(signautres_per_body_site, nrow)) %>% 
+  set_colnames(c("Body Site", "Significantly enriched Signatures")) %>% 
+  set_rownames(NULL) %>% 
+  kbl(caption = "Number of significant signatures as found in BugSigDB. Significance is defined as binomial test p-value less than 0.05. Signautres were extracted using bugSigSimple::createTaxonTable") %>% 
+  kable_styling()
+
+```
+
+## Summary of signatures's evidence
+
+  - Without pre-filtering, 26 bugs are differentially abundant in the same 
+  direction across studies
+  
+  - If split by sequencing/census method, only 16S returns significant signatures
+  
+  - If split by body site, only `Feces` show associations.
+
+We will continue studying all stool signatures only, given that other body sites 
+do not show consensus.
+
+# Signatures for each body site in only `Body site = Feces` studies
+
+```{r}
+
+bsdb_PD_signatures_allMethods_onlyFeces <- filter(bsdb_PD_signatures_allMethods, `Body site` == "Feces")
+bsdb_PD_signatures_allMethods_onlyFeces.list <- split.data.frame(bsdb_PD_signatures_allMethods_onlyFeces, bsdb_PD_signatures_allMethods_onlyFeces$`Sequencing type`)
 
 some_stats.mxt <- cbind(
-  sapply(bsdb_PD_signatures_splitMethods, nrow), 
-  t(sapply(bsdb_PD_signatures_splitMethods, function(x) table(x$`Abundance in Group 1`, useNA = "always")))
+  sapply(bsdb_PD_signatures_allMethods_onlyFeces.list, nrow), 
+  t(sapply(bsdb_PD_signatures_allMethods_onlyFeces.list, function(x) table(x$`Abundance in Group 1`, useNA = "always")))
   ) %>% 
   set_colnames(c("Total Signatures", "Decreased in PD", "Increased in PD", "NA"))
 
-caption <- paste0("Summary table of BugSigDB signatures reported for EFO mondo with code ", efo_id, ". Signatures were split by sequencing method in rows. Date of analysis: ", Sys.Date(), ", bugsigdbr package version: ", packageVersion("bugsigdbr"))
+caption <- paste0("Summary table of BugSigDB signatures reported for Parkinson's disease (EFO/MONDO code ", efo_id, "). Signatures were split by sequencing method in rows. Date of analysis: ", Sys.Date(), ", bugsigdbr package version: ", packageVersion("bugsigdbr"))
 
 kbl(some_stats.mxt, caption = caption) %>% 
   kable_styling()
 ```
 
 ```{r}
-createTaxonTable(bsdb_PD_signatures_allMethods, n = 20) %>% 
-  kbl(caption = "List of top 20 signatures found in all Parkinson studies regardless of the sequencing technique. The table was generated with bugSigSimple::createTaxonTable") %>% 
+createTaxonTable(bsdb_PD_signatures_allMethods_onlyFeces, n = 20) %>% 
+  kbl(caption = "List of top 20 signatures found in gut microbiome (Feces) across Parkinson studies regardless of the sequencing technique. The table was generated with bugSigSimple::createTaxonTable") %>% 
   kable_styling()
 ```
 
@@ -139,7 +252,7 @@ We are mostly interested in shotgun sequencing studies, as they are more
 comparable across studies.
 
 ```{r}
-tmp %>% 
+studies_table_clean %>% 
   filter(`Sequencing type` == "WMS") %>% 
   reactable(filterable = TRUE)
 ```
@@ -164,7 +277,7 @@ tmp <- bsdb_PD_signatures_splitMethods$WMS %>%
     FirstAuth = str_split(`Authors list`, pattern = ", ") %>% sapply("[[", 1)) %>% 
   rename(taxaNames = `MetaPhlAn taxon names`) %>% 
   select(taxaNames, FirstAuth, incr_decr) %>% 
-  distinct()
+  distinct() 
 
 #' Manually remove Clostridiaceae family increase in Rosario D, which 
 #' causes a conflict AND is only found increased in PD, in the paper
@@ -223,3 +336,38 @@ sources of variability in studies, that include, among all:
 Our meta-analysis will aim to minimize the effect of steps 2 and 3. Adjusting 
 for DNA extraction and sequencing method could help minimizing that bias too.
 
+# PubMed querying strategy
+
+## Not all shotgun publications in my list are in PubMed query results
+
+```{r, fig.cap="Venn diagram of shotgun studies included in BugSigDB and Giacomo's lists. NB: Giacomo's list included 4 preprints"}
+shotgun_curated_studies_BugSigDB <- studies_table_clean %>% 
+  filter(`Sequencing type` == "WMS")
+
+shotgun_curated_studies_GA <- read_tsv("~/Documents/git_repos/parkinsonsMetagenomicData/parkinson_shotgun_datasets.tsv")
+
+
+ggVennDiagram::ggVennDiagram(list("Giacomo" = shotgun_curated_studies_GA$`doi.org link`, "BugSigDB" = shotgun_curated_studies_BugSigDB$DOI)) + 
+  scale_x_continuous(expand = c(-1.5,1.5))
+```
+
+  * Studies unique to BugSigDB both use Bedarf 2017 dataset to draw conclusions.
+  Given that we are interested mostly 
+  
+# Comments on BugSigDB based on my query
+
+  - Some `Body site`s can be further curated, because there is a "Feces,Blood" 
+  study that could be put into the more numerous "Blood,Feces" category. 
+  (PMID: 35645785).
+  
+  - PMID 33293403 curation should be reviewed, I think, for the following reasons:
+  
+    1. The `Condition` is idiopathic rapid eye movement sleep behavior disorder, 
+    not `Parkinson's disease`
+    2. `Body site` says "Intestine" but should "Feces"
+  
+    The curator is "Aishat", no reviewer 
+  - The `createStudyTable` is a nice function but could be expanded, maybe to
+  include more options, while leaving a default. 
+  **I"m working on a GitHub issue or feature request**
+  
