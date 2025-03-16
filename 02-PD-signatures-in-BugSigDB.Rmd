@@ -42,6 +42,9 @@ library(bugsigdbr)
 library(bugSigSimple)
 library(BugSigDBStats)
 
+
+# to record continent of origin
+library(countrycode)
 ```
 
 # PD studies in `BugSigDB`
@@ -80,11 +83,21 @@ bsdb_PD_signatures_allMethods <- filter(bsdb,
        `Host species` == "Homo sapiens"
        )
 
-
 # fix typo of feces,blood
 
 bsdb_PD_signatures_allMethods <- mutate(bsdb_PD_signatures_allMethods,
-                                        `Body site` = ifelse(`Body site` == "Feces,Blood", "Blood,Feces"))
+                                        `Body site` = ifelse(`Body site` == "Feces,Blood", "Blood,Feces", `Body site`))
+
+# create a continent variable
+bsdb_PD_signatures_allMethods$Continent <- strsplit(bsdb_PD_signatures_allMethods$`Location of subjects`, ",") %>% 
+  lapply(
+    function(x){
+      tmp <- countrycode(x, origin = "country.name", "continent") 
+      tmp[(tmp == "Americas") & (x %in% c("United States of America", "Canada"))] <- "North America"
+      tmp[(tmp == "Americas") & !(x %in% c("United States of America", "Canada"))] <- "South America"
+      return(tmp)
+      }) %>%  
+  sapply(paste, collapse = ",")
 
 source(file = "~/Desktop/bugSigSimple_upgrade.R")
 
@@ -107,11 +120,11 @@ createStudyTable(bsdb_PD_signatures_allMethods) %>%
 ```{r}
 # NUmber of studies per year
 
-studies_per_year <- bsdb_PD_signatures_allMethods %>% select(PMID, Year) %>% distinct() %>% .$Year %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Year", "N. Occurrences")) 
+studies_per_year <- bsdb_PD_signatures_allMethods %>% select(PMID, Year) %>% distinct() %>% .$Year %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Year of Publication", "Number of Studies")) 
 
-years_barplot <- ggplot(studies_per_year, aes(x = Year, y = `N. Occurrences`)) + 
+years_barplot <- ggplot(studies_per_year, aes(x = `Year of Publication`, y = `Number of Studies`)) + 
   geom_col(fill = "#34a270") + 
-  geom_text(data = studies_per_year, mapping = aes(x = Year, y = `N. Occurrences` + 0.2, label = `N. Occurrences`)) + 
+  geom_text(data = studies_per_year, mapping = aes(x = `Year of Publication`, y = `Number of Studies` + 0.2, label = `Number of Studies`)) + 
   theme_light() +
   scale_y_continuous(breaks = 1:10)
 
@@ -119,11 +132,11 @@ ggsave(filename = "~/Desktop/CRN_MEETING/studies_per_year.png", plot =  years_ba
 
 # Body sites 
 
-bodySites <- bsdb_PD_signatures_allMethods %>% select(PMID, `Body site`) %>% distinct() %>% mutate(`Body site` = ifelse(`Body site` == "Feces,Blood", "Blood,Feces", `Body site`)) %>% .$`Body site` %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Body Site", "N. Occurrences")) 
+bodySites <- bsdb_PD_signatures_allMethods %>% select(PMID, `Body site`) %>% distinct() %>% mutate(`Body site` = ifelse(`Body site` == "Feces,Blood", "Blood,Feces", `Body site`)) %>% .$`Body site` %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Body Site", "Number of Studies")) 
 
-bodySite_barplot <- ggplot(bodySites, aes(x = reorder(`Body Site`, - `N. Occurrences`), y = `N. Occurrences`)) + 
+bodySite_barplot <- ggplot(bodySites, aes(x = reorder(`Body Site`, - `Number of Studies`), y = `Number of Studies`)) + 
   geom_col(fill = "#cf2fb3") + 
-  geom_text(data = bodySites, mapping = aes(x = reorder(`Body Site`, - `N. Occurrences`), y = `N. Occurrences` + 1.5, label = `N. Occurrences`)) + 
+  geom_text(data = bodySites, mapping = aes(x = reorder(`Body Site`, - `Number of Studies`), y = `Number of Studies` + 1.5, label = `Number of Studies`)) + 
   theme_light() +
   theme(axis.text.x = element_text(angle = -90, hjust = 0), axis.title.x = element_blank())
 
@@ -131,19 +144,41 @@ ggsave(filename = "~/Desktop/CRN_MEETING/BodySites.png", plot = bodySite_barplot
 
 # Census methods 
 
-censusMethods <- bsdb_PD_signatures_allMethods %>% select(PMID, `Sequencing type`) %>% distinct() %>% .$`Sequencing type` %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Census Method", "N. Occurrences")) 
+censusMethods <- bsdb_PD_signatures_allMethods %>% select(PMID, `Sequencing type`) %>% distinct() %>% .$`Sequencing type` %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Census Method", "Number of Studies")) 
 
-censusMethods_barplot <- ggplot(censusMethods, aes(x = reorder(`Census Method`, - `N. Occurrences`), y = `N. Occurrences`)) + 
+censusMethods_barplot <- ggplot(censusMethods, aes(x = reorder(`Census Method`, - `Number of Studies`), y = `Number of Studies`)) + 
   geom_col(fill = "#0c8dc3") + 
-  geom_text(data = censusMethods, mapping = aes(x = reorder(`Census Method`, - `N. Occurrences`), y = `N. Occurrences` + 1, label = `N. Occurrences`)) + 
+  geom_text(data = censusMethods, mapping = aes(x = reorder(`Census Method`, - `Number of Studies`), y = `Number of Studies` + 1, label = `Number of Studies`)) + 
   theme_light() +
   theme(axis.title.x = element_blank())
 
 ggsave(filename = "~/Desktop/CRN_MEETING/CensusMethods.png", plot = censusMethods_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
 
+# Census methods 
+
+location.df <- bsdb_PD_signatures_allMethods %>% select(PMID, `Location of subjects`) %>% distinct() %>% .$`Location of subjects` %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Location of subjects", "Number of Studies")) %>% 
+  left_join(bsdb_PD_signatures_allMethods %>% select(`Location of subjects`, Continent), by = "Location of subjects") %>% 
+  # for now, remove multi-country studies
+  filter(!grepl(",", `Location of subjects`)) %>% 
+  distinct() %>% 
+  mutate(`Location of subjects` = case_when(
+    `Location of subjects` == "United States of America" ~ "USA", 
+    TRUE ~ `Location of subjects`
+    ))
+
+location_barplot <- ggplot(location.df, aes(x = reorder(`Location of subjects`, - `Number of Studies`), y = `Number of Studies`)) + 
+  geom_col(fill = "#e9a64c") + 
+  geom_text(data = location.df, mapping = aes(x = reorder(`Location of subjects`, - `Number of Studies`), y = `Number of Studies` + 1, label = `Number of Studies` )) +
+  theme_light() +
+  facet_wrap(~Continent,scales = "free_x") + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0.5), axis.title.x = element_blank())
+  
+
+ggsave(filename = "~/Desktop/CRN_MEETING/GeographicDistribution.png", plot = location_barplot, height = 5, width = 5, dpi = 300, bg = "transparent")
+
 ggarrange(
-  ggarrange(years_barplot, censusMethods_barplot,  nrow = 2), 
-  bodySite_barplot, 
+  years_barplot, censusMethods_barplot,
+  bodySite_barplot, location_barplot,
   ncol = 2
   )
 
@@ -163,7 +198,7 @@ more disproportionate two groups, the more significant the test is.
 ## All studies
 
 ```{r}
-createTaxonTable(bsdb_PD_signatures_allMethods, Inf) %>% 
+tmp <- createTaxonTable(bsdb_PD_signatures_allMethods, Inf) %>% 
   filter(`Binomial Test pval` < 0.05) %>% 
   kbl(caption = "Number of significant signatures as found in BugSigDB. Significance is defined as binomial test p-value less than 0.05. Signautres were extracted using bugSigSimple::createTaxonTable") %>% 
   kable_styling()
