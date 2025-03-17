@@ -59,7 +59,6 @@ condition_of_interest <- "Parkinson disease"
 efo_id <- "MONDO:0005180" 
 host <- "Homo sapiens"
 
-
 cbind(c("Condition", "EFO ID", "Host species"), c(condition_of_interest, efo_id, host)) %>% 
   set_colnames(c("Parameter", "Value")) %>% 
   kbl() %>% 
@@ -80,7 +79,7 @@ bsdb_PD_signatures_allMethods <- filter(bsdb,
        # get studies/signatures on Parkinson alone
        grepl(efo_id, `EFO ID`),
        # restrict search to Homo sapiens
-       `Host species` == "Homo sapiens"
+       `Host species` == host
        )
 
 # fix typo of feces,blood
@@ -293,6 +292,9 @@ studies_table_clean %>%
 ```
 
 ```{r}
+
+bsdb_PD_signatures_splitMethods <- split.data.frame(bsdb_PD_signatures_allMethods, bsdb_PD_signatures_allMethods$`Sequencing type`)
+
 createTaxonTable(bsdb_PD_signatures_splitMethods$WMS, n= 20) %>% 
   kbl() %>% 
   kable_styling()
@@ -379,7 +381,7 @@ for DNA extraction and sequencing method could help minimizing that bias too.
 shotgun_curated_studies_BugSigDB <- studies_table_clean %>% 
   filter(`Sequencing type` == "WMS")
 
-shotgun_curated_studies_GA <- read_tsv("~/Documents/git_repos/parkinsonsMetagenomicData/parkinson_shotgun_datasets.tsv")
+shotgun_curated_studies_GA <- read_tsv("~/Documents/git_repos/parkinsons_data_search/parkinson_shotgun_datasets.tsv")
 
 
 ggVennDiagram::ggVennDiagram(list("Giacomo" = shotgun_curated_studies_GA$`doi.org link`, "BugSigDB" = shotgun_curated_studies_BugSigDB$DOI)) + 
@@ -406,3 +408,119 @@ ggVennDiagram::ggVennDiagram(list("Giacomo" = shotgun_curated_studies_GA$`doi.or
   include more options, while leaving a default. 
   **I"m working on a GitHub issue or feature request**
   
+# IBS signatures in BugSigDB
+
+```{r}
+condition_of_interest <- "Irritable Bowel Syndrome"
+efo_id <- "EFO:0000555" 
+host <- "Homo sapiens"
+
+
+cbind(c("Condition", "EFO ID", "Host species"), c(condition_of_interest, efo_id, host)) %>% 
+  set_colnames(c("Parameter", "Value")) %>% 
+  kbl() %>% 
+  kable_styling()
+```
+
+
+```{r}
+bsdb_IBS_signatures_allMethods <- filter(bsdb, 
+       # get studies/signatures on Parkinson alone
+       grepl(efo_id, `EFO ID`),
+       # restrict search to Homo sapiens
+       `Host species` == host
+       )
+```
+
+```{r}
+createStudyTable2(bsdb_IBS_signatures_allMethods) %>% 
+  reactable(filterable = TRUE, searchable = TRUE)
+```
+
+
+```{r}
+createTaxonTable(bsdb_IBS_signatures_allMethods) %>% 
+  filter(`Binomial Test pval` < 0.05) %>% 
+  reactable(filterable = TRUE, searchable = TRUE)
+```
+
+# IBD signatures in BugSigDB
+
+```{r}
+condition_of_interest <- "Inflammatory Bowel Disease"
+efo_id <- "EFO:0003767" 
+host <- "Homo sapiens"
+
+
+cbind(c("Condition", "EFO ID", "Host species"), c(condition_of_interest, efo_id, host)) %>% 
+  set_colnames(c("Parameter", "Value")) %>% 
+  kbl() %>% 
+  kable_styling()
+```
+
+
+```{r}
+bsdb_IBD_signatures_allMethods <- filter(bsdb, 
+       # get studies/signatures on Parkinson alone
+       grepl(efo_id, `EFO ID`),
+       # restrict search to Homo sapiens
+       `Host species` == host
+       )
+```
+
+```{r}
+createStudyTable2(bsdb_IBD_signatures_allMethods) %>% 
+  reactable(filterable = TRUE, searchable = TRUE)
+```
+
+
+```{r}
+createTaxonTable(bsdb_IBD_signatures_allMethods) %>% 
+  filter(`Binomial Test pval` < 0.05) %>% 
+  reactable(filterable = TRUE, searchable = TRUE)
+```
+
+# Constipation signatures in BugSigDB
+
+The following code is run but does not return studies nor signatures. 
+That is because, to this date, BugSigDB has not been populated with studies that
+have looked directly at **constipation** as `Condition`. 
+
+Feel free to verify, but also a View(bsdb) followed by a general search of 
+"constip" did not produce results except in co-occurrence with Autism spectrum
+disorder or with Parkinson disease
+
+```{r}
+condition_of_interest <- "Constipation"
+efo_id <- "NCIT:C37930" 
+host <- "Homo sapiens"
+
+
+cbind(c("Condition", "EFO ID", "Host species"), c(condition_of_interest, efo_id, host)) %>% 
+  set_colnames(c("Parameter", "Value")) %>% 
+  kbl() %>% 
+  kable_styling()
+```
+
+
+```{r}
+bsdb_IBD_signatures_allMethods <- filter(bsdb, 
+       # get studies/signatures on Parkinson alone
+       grepl(efo_id, `EFO ID`),
+       # restrict search to Homo sapiens
+       `Host species` == host
+       )
+```
+
+```{r}
+createStudyTable2(bsdb_IBD_signatures_allMethods) %>% 
+  reactable(filterable = TRUE, searchable = TRUE)
+```
+
+
+```{r}
+createTaxonTable(bsdb_IBD_signatures_allMethods) %>% 
+  filter(`Binomial Test pval` < 0.05) %>% 
+  reactable(filterable = TRUE, searchable = TRUE)
+```
+
