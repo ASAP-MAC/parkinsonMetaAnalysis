@@ -28,6 +28,7 @@ knitr::opts_chunk$set(
 library(mia)
 library(magrittr)
 library(data.table)
+library(tidyverse)
 
 library(ggpubr)
 library(meta)
@@ -36,13 +37,14 @@ library(kableExtra)
 
 # personal data libraries
 # devtools::install_github("g-antonello/biobakeryUtils")
-library(biobakeryUtils)
+source("../biobakeryUtils/R/complete_unknown_taxonomy.R")
+source("../biobakeryUtils/R/wrangle_metaphlan.R")
 source("R/lm_standardization_utility_functions.R")
 ```
 
 # Introduction
 
-Studies included in the meta-analysis are the following:
+## PD studies processed with the nextflowMAC pipeline
 
 ```{r}
 
@@ -51,11 +53,14 @@ Studies included in the meta-analysis are the following:
 fread("studies_processed.tsv")[,1:5] %>% 
   relocate(`doi.org link`, .after = `Sequence Acc. code`) %>% 
   kbl(
-    caption = paste("List of studies included in the meta-analysis so far.",
+    caption = paste("List of studies processed with the aim to include them in 
+                    the meta-analysis so far.",
     "Analysis date:", 
     Sys.Date())) %>%
   kable_styling()
 ```
+
+## Load metadata file
 
 ```{r load metadata table}
 # download.file("https://raw.githubusercontent.com/ASAP-MAC/parkinsons_data_search/refs/heads/main/shotgun_samples/merged_data/merged_metadata.csv", destfile = "metadata.csv")
@@ -66,17 +71,22 @@ metadata_all_studies.df <- fread("metadata.csv") %>%
 rownames(metadata_all_studies.df) <- metadata_all_studies.df$uuid
 ```
 
-## IMPORTANT: Some exceptions that should be resolved in the source data
+**IMPORTANT**: Some exceptions that should be resolved in the source data.
 
-```{r metadata exceptions}
+```{r}
 # Exception 1 - Exclude BLANK and MSA samples (BedarfJC_2023)
 
 metadata_all_studies.df %<>% filter(!grepl("BLANK", sample_id))
 metadata_all_studies.df %<>% filter(!grepl("MSA", sample_id))
+```
 
-# Exception 2 - create Healthy label to MaoL_2021
+```{r}
+# Exception 2 - create 'Healthy' label to MaoL_2021
+
 metadata_all_studies.df$disease[metadata_all_studies.df$study_name == "MaoL_2021" & is.na(metadata_all_studies.df$disease)] <- "Healthy"
 ```
+
+## Load microbiome table
 
 ```{r load microbiome counts table}
 # download.file("https://media.githubusercontent.com/media/ASAP-MAC/parkinsons_data_search/refs/heads/main/shotgun_samples/merged_data/merged_unknown.tsv", destfile = "merged_unknown.tsv")
@@ -85,16 +95,18 @@ microbiome_tables_all_studies.df <- fread("merged_unknown.tsv", skip = 1) %>%
   wrangle_metaphlan(taxonomic_lvl = "Species")
 ```
 
+## Create `SummarizedExperiment` object
+
 ```{r report failed or otherwise missing samples}
 samples_intersection <- intersect(rownames(metadata_all_studies.df), colnames(microbiome_tables_all_studies.df$profiles))
 
 filter(metadata_all_studies.df, !(uuid %in% samples_intersection))[,1:4] %>% 
   mutate(rowCount = 1:nrow(.), .before = uuid) %>% 
   as_tibble() %>% 
-  kbl(caption = "") %>% 
+  kbl(caption = "Samples in the metadata that are not present in the metaphlan
+      table. These samples will be removed") %>% 
   kable_styling()
 ```
-
 
 ```{r create Summarized Experiment object}
 metadata_removedFailedSamples <- metadata_all_studies.df[samples_intersection,]
@@ -112,10 +124,13 @@ microbiome_PD_data.se <- SummarizedExperiment(
 microbiome_PD_data.se
 ```
 
-# Perform meta-analysis as 'traditionally done' 
+# Perform meta-analysis as suggested in sex meta-analysis vignette
 
-This restricts our analyses to cases where we have case-controls for 
-differential abundance analysis on binary data.
+The vignette can be found at [curatedMetagenomicDataAnalyses](...link...) and 
+is designed to perform binary associations. The method is not really advance
+but it allows for some degree of flexibility.
+
+## Table of cases and controls in each study
 
 ```{r}
 cases_ctrls_vs_study_name <- colData(microbiome_PD_data.se) %>% 
@@ -128,32 +143,21 @@ cases_ctrls_vs_study_name <- colData(microbiome_PD_data.se) %>%
 cases_ctrls_vs_study_name_wider <- cases_ctrls_vs_study_name %>% 
   pivot_wider(names_from = Var1, values_from = Freq, values_fill = 0)
 
-studies_with_enough_cases_ctrls <- cases_ctrls_vs_study_name_wider$study_name[cases_ctrls_vs_study_name_wider$Healthy >= 10 & cases_ctrls_vs_study_name_wider$`Parkinson disease` >= 10]
+# create a character vector with study names that can and will be used
+# in the meta-analysis
+study_names_usable <- cases_ctrls_vs_study_name_wider$study_name[cases_ctrls_vs_study_name_wider$Healthy >= 10 & cases_ctrls_vs_study_name_wider$`Parkinson disease` >= 10]
 
-cases_ctrls_vs_study_name_wider %>% 
-  kbl(caption = "Overview of diseases reported in Parkinson's disease datasets. Notice that only Wallen has a large documentation of other diseases. We will concentrate only on Parkinson and otherwise healthy participants") %>% 
+# sum cases/controls across studies that will actually be used
+colSums_useful_studies <- cases_ctrls_vs_study_name_wider[cases_ctrls_vs_study_name_wider$study_name %in% study_names_usable, 2:ncol(cases_ctrls_vs_study_name_wider)] %>% colSums()
+
+cases_ctrls_vs_study_name_wider %>%
+  rbind.data.frame(c("Total", colSums_useful_studies)) %>% 
+  kbl(caption = "Overview of diseases reported in Parkinson's disease datasets. Notice that only Wallen has a large documentation of other diseases. We will concentrate only on Parkinson and otherwise healthy participants. The last row includes the total number of cases of each disease(s) (column) across all studies") %>% 
   kable_styling() %>% 
-  row_spec(which(!(cases_ctrls_vs_study_name_wider$study_name %in% studies_with_enough_cases_ctrls)), color = 
+  row_spec(which(!(cases_ctrls_vs_study_name_wider$study_name %in% study_names_usable)), color = 
              "gray")
 
 ```
-
-
-```{r}
-tmp <- cases_ctrls_vs_study_name_wider %>%
-  .[,2:3] %>%
-  colSums()
-
-
-tmp2 <- cases_ctrls_vs_study_name_wider %>%
-  filter(study_name %in% studies_with_enough_cases_ctrls) %>%
-  .[,2:3] %>%
-  colSums()
-
-print(rbind(c(tmp, "Total" = sum(tmp)),
-              c(tmp2, "Total" = sum(tmp2))) %>% set_rownames(c("All studies", "Studies w/ enough cases/controls")))
-```
-
 
 Based on vignette in [curatedMetagenomicDataAnalyses](https://github.com/waldronlab/curatedMetagenomicDataAnalyses/blob/main/vignettes/Sex_metaanalysis_vignette.Rmd)
 
@@ -161,6 +165,13 @@ Based on vignette in [curatedMetagenomicDataAnalyses](https://github.com/waldron
 
 These functions will be used to compute the standardized difference (d) from the t-value of linear models, the respective Standard Error ($SE_d$)
 and transform relative abundance data.
+
+```{r}
+asin_trans <- function(x){
+  return(apply(x, 2, function(x) asin(sqrt(x/100))))
+}
+```
+
 
 ```{r}
 #Compute Standardized Difference (d) from t-value
@@ -175,23 +186,6 @@ SE_d <- function(n1,n2,d) {
   return(se_d)
 }
 ```
-
-We define another function to transform the data with the $arcsin(\sqrt{\frac{RelAb}{100}})$ of the corresponding proportions.
-```{r}
-#Transform relative abundances
-asin_trans <- function(rel_ab){
-  return(asin(sqrt(rel_ab/100)))
-}
-```
-
-In order to proceed with the meta-analysis, we have to compute an effect-size for each population.
-Each dataset effect-size is computed with the function we define after. This function estimates a per-feature relationship between the sex (encoded here as a binary variable) and the arcsin-square-root relative abundance of each species. The estimates is extracted by an Ordinary Least Squares (OLS) model, in which the microbial feature (in this case, the species) is the response, and the sex is the predictor. Using this method we can control our model by age & by BMI of the patient. 
-
-The model has indeed the shape:
-
-$$ species \sim  sex + age + BMI$$
-
-
 
 Weighted effect-size of sex in this model is computed as:
 
@@ -209,7 +203,9 @@ where:
 
 The computed Effect-size (corrected by covariates) has Standard Error and Variance:
 
-$$SE =\sqrt{\frac{n1+n2-1}{n1+n2-3}\cdot\frac{4}{n1+n2}\cdot(1+\frac{\text{effect-size}^2}{8})}$$
+$$
+SE =\sqrt{\frac{n1+n2-1}{n1+n2-3}\cdot\frac{4}{n1+n2}\cdot(1+\frac{\text{effect-size}^2}{8})}
+$$
 
 ```{r}
 #Function that takes in input a tse object and for each dataset computes a linear model for each linear species
@@ -317,55 +313,13 @@ runMetaanalysis <- function(d_vector, SE_d_vector) {
 }
 ```
 
+```{r define filter_sort}
 
-```{r}
-data_okAnalysis.se <-  microbiome_PD_data.se[,microbiome_PD_data.se$study_name %in% studies_with_enough_cases_ctrls] %>% 
-  .[,.$disease %in% c("Healthy", "Parkinson disease")]
+#' As the name suggests, this function takes a data frame as input and filters
+#' rows based on the number of CohenD that could not be estimated.
+#' The vignette uses 4 as a threshold, meaning features that were estimated
+#' in at least 5 studies are kept in the final results.
 
-table1::table1(~ study_name | disease, as.data.frame(colData(data_okAnalysis.se)))
-```
-
-```{r}
-t0_original <- Sys.time()
-#Computing Standardized Mean Differences (d), and the respective standard error
-#(SE_D) of species relative abundances in all datasets
-# default takes first assay from the list first assay
-# also, it does transformation internally!
-
-SDM <- computeStandardizedMeanDifference(data_okAnalysis.se)  
-
-#Merging outputs of all datasets so to have a single dataframe with all the 
-#species found across the cohorts
-SDM_processed <- Reduce(
-  function(x, y)
-    merge(x, y, all=TRUE),
-  lapply(SDM, function(x) data.frame(x, rn = row.names(x)))
-  ) %>%
-  column_to_rownames(var="rn")
-
-#Subsetting from SDM dataframe only the columns we actually need to perform 
-#the meta-analysis into two separated dataframes (one for the standardized mean
-#differences (d), and one for the respective standard error (SE_D)
-
-d_matrix <- SDM_processed %>% 
-  select(contains("CohenD"))
-d_matrix <- t(d_matrix)
-se_matrix <- SDM_processed %>% 
-  select(contains("SE_d"))
-se_matrix <- t(se_matrix)
-
-#Run meta-analyses
-meta_analysis_regression <- t(mapply(function(x,y) {runMetaanalysis(x,y)},
-                                                   as.data.frame(d_matrix),
-                                                   as.data.frame(se_matrix)))
-
-tmp_df <- cbind(SDM_processed, meta_analysis_regression)
-
-#Correct p-values of random effect with FDR Benjamini-Hochberg
-tmp_df$FDR_Qvalue <- p.adjust(tmp_df$`p-value`,method = "BH")
-```
-
-```{r, echo=FALSE, message=FALSE}
 filter_sort <- function(df_to_sort, na_filter){
   cols_CohenD <- grep("CohenD|Correlation",colnames(df_to_sort))
   cols_CohenD <- cols_CohenD[which(cols_CohenD >= 9)]
@@ -394,27 +348,89 @@ filter_sort <- function(df_to_sort, na_filter){
   
   return(df_to_sort)
 }
+```
+
+## Perform meta-analysis on select datasets
+
+```{r}
+data_okAnalysis.se <-  microbiome_PD_data.se[,microbiome_PD_data.se$study_name %in% study_names_usable] %>% 
+  .[,.$disease %in% c("Healthy", "Parkinson disease")]
+
+table1::table1(~ study_name | disease, as.data.frame(colData(data_okAnalysis.se)))
+```
+
+```{r}
+t0_original <- Sys.time()
+#Computing Standardized Mean Differences (d), and the respective standard error
+#(SE_D) of species relative abundances in all datasets
+# default takes first assay from the list first assay
+# also, it does transformation internally!
+system.time(
+SDM <- computeStandardizedMeanDifference(data_okAnalysis.se)  
+)
+#Merging outputs of all datasets so to have a single dataframe with all the 
+#species found across the cohorts
+SDM_processed <- Reduce(
+  function(x, y)
+    merge(x, y, all=TRUE),
+  lapply(SDM, function(x) data.frame(x, rn = row.names(x)))
+  ) %>%
+  column_to_rownames(var="rn")
+
+#Subsetting from SDM dataframe only the columns we actually need to perform 
+#the meta-analysis into two separated dataframes (one for the standardized mean
+#differences (d), and one for the respective standard error (SE_D)
+
+d_matrix <- SDM_processed %>% 
+  select(contains("CohenD"))
+d_matrix <- t(d_matrix)
+se_matrix <- SDM_processed %>% 
+  select(contains("SE_d"))
+se_matrix <- t(se_matrix)
+
+#Run meta-analyses
+system.time(
+meta_analysis_regression <- t(mapply(function(x,y) {runMetaanalysis(x,y)},
+                                                   as.data.frame(d_matrix),
+                                                   as.data.frame(se_matrix)))
+)
+
+tmp_df <- cbind(SDM_processed, meta_analysis_regression)
+
+#Correct p-values of random effect with FDR Benjamini-Hochberg
+tmp_df$FDR_Qvalue <- p.adjust(tmp_df$`p-value`,method = "BH")
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+
 # before filtering, the data has 3115 rows (taxa) and 40 (4 x N datasets)
 tmp_df <- tmp_df %>% 
   # this steps sorts columns to have meta-analysis ones in front
-  dplyr::select(RE:FDR_Qvalue, everything()) 
+  dplyr::select(RE:FDR_Qvalue, everything()) %>% 
+  rownames_to_column("FeatureID")
 
-final_df <- filter_sort(tmp_df, 4) %>% 
-  rownames_to_column("FeatureID") %>% 
+original_meta_analysis_final.df <- filter_sort(tmp_df, 4) %>% 
   separate_wider_delim(cols = "CI_RE", names = c("CI_RE_lower", "CI_RE_upper"), delim = ";") %>% 
   column_to_rownames("FeatureID") %>% 
   mutate_all(.funs = as.numeric) %>% 
   rownames_to_column("FeatureID")
 
+# write results
+dir.create("results/", showWarnings = FALSE, recursive = TRUE)
+write_tsv(original_meta_analysis_final.df, "results/asin_sqrt_PD_only.tsv")
+
 t1_original <- Sys.time()
 ```
+
+## Forest plot of top 20 features with strongest meta-analysis |effect sizes|
 
 ```{r}
 topFeatures.N <- 10
 
 topN_bottomN_All.df <- rbind.data.frame(
-  arrange(final_df, desc(RE)) %>% head(topFeatures.N),
-  arrange(final_df, RE) %>% head(topFeatures.N)
+  arrange(original_meta_analysis_final.df, desc(RE)) %>% head(topFeatures.N),
+  arrange(original_meta_analysis_final.df, RE) %>% head(topFeatures.N)
   ) %>% arrange(RE) %>% 
   mutate(FeatureID = gsub("_", " ", substr(FeatureID, 4, nchar(FeatureID))))
 
@@ -456,13 +472,25 @@ ggsave(plot = forest_plot, filename = "Figures/PD_meta-analysis_ForestPlot.png",
 forest_plot
 ```
 
-# My re-implementation (WIP)
+# My re-implementation
+
+This re-implementation is not too necessary, but it allows to see the process
+more step-by-step with the tidyverse syntax.
+
+## step 0 - melt `SummarizedExperiment` into `data.frame`
+
+NB: This is where you can add the covariates you are interested in modeling
 
 ```{r}
 t0_reimplemented <- Sys.time()
 
 data_okAnalysis_molten.df <- mia::meltSE(data_okAnalysis.se, assay.type = "metaphlan_asinSqrt", add.col = c("study_name", "disease"))
+```
 
+## step 1 - Regression
+
+```{r}
+system.time(
 per_dataset_regression <- data_okAnalysis_molten.df  %>% 
   group_by(study_name, FeatureID) %>% 
   group_modify(~ {
@@ -479,22 +507,24 @@ per_dataset_regression <- data_okAnalysis_molten.df  %>%
   filter(term == "diseaseParkinson disease") %>% 
   # adjust p.values for all taxa tested, grouping by dataset
   group_by(study_name) %>% 
-  # Adjust p-values to account for the number of independent tests
   mutate(
     q.value = p.adjust(p.value, "BH"),
     .after = p.value
-  ) 
+  )) 
 
 group_by(per_dataset_regression, study_name) %>% 
   reframe(
     Features_failed_regression = sum(!is.na(statistic)), 
     Features_tested_Tot = n()
     ) %>% 
-  kbl(caption = "OVerview of features which were succesfully modeled in the 
+  kbl(caption = "Overview of features which were succesfully modeled in the 
       linear model step in each dataset. Success was defined as t-statistic 
       different from NA") %>% 
   kable_styling()
+)
 ```
+
+## Step 2 - calculate CohenD scaled effect sizes
 
 ```{r calculate Cohen D and SE}
 
@@ -511,8 +541,10 @@ head(per_dataset_regression_with_CohenD, 20) %>%
   kable_styling()
 ```
 
+## Step 3 - perform meta-analysis
 
 ```{r}
+system.time(
 meta_analysis <- per_dataset_regression_with_CohenD %>% 
   group_by(FeatureID) %>% 
   group_modify( ~ {
@@ -538,9 +570,9 @@ meta_analysis <- per_dataset_regression_with_CohenD %>%
   }) %>%
   ungroup() %>% 
   # adjustment should be done to account for the number of variables/features
-  # included in the meta-analysis
+  # included in the meta-analysis, but not by the number of datasets
   mutate(FDR_Qvalue = p.adjust(p.value, method = "BH"), .after = p.value)
-
+)
 
 ## Add input data as wide data frame
 
@@ -550,7 +582,6 @@ per_dataset_regression_with_CohenD_wider <- per_dataset_regression_with_CohenD %
   ungroup() %>%
   # set column names to have study name first, the the variable
   set_names(sapply(str_split(colnames(.), pattern = "\\_\\_"), function(x) ifelse(length(x) == 2, paste(x[2], x[1], sep = "__"), x)))
-
 
 meta_analysis_complete <- full_join(meta_analysis, per_dataset_regression_with_CohenD_wider, by = "FeatureID")
 ``` 
@@ -584,13 +615,13 @@ Simple re-implementation
 t1_original - t0_original
 ```
 
-My re-implementation is heavier, but it can be more transparent, thanks to the 
+My re-implementation takes longer, but it can be more transparent, thanks to the 
 tidyverse syntax. Maybe we could re-write the functions into a meta-analysis 
 package? Doesn't have to be fancy, but rather usable.
 
 ```{r}
 old_vs_new_implementation <- full_join(
-    final_df %>% select(FeatureID, RE, p.value = `p-value`) %>% 
+    original_meta_analysis_final.df %>% select(FeatureID, RE, p.value = `p-value`) %>% 
     mutate(RE = as.double(RE), p.value = as.double(p.value)),
   meta_analysis_complete %>% select(FeatureID, RE, p.value), by = "FeatureID") %>%
   mutate(absDevRE = RE.y - RE.x,

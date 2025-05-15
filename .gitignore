@@ -50,3 +50,6 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# MAC cache files
+.DS_Store

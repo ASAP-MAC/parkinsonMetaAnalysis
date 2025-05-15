@@ -504,7 +504,7 @@ cbind(c("Condition", "EFO ID", "Host species"), c(condition_of_interest, efo_id,
 
 
 ```{r}
-bsdb_IBD_signatures_allMethods <- filter(bsdb, 
+bsdb_constipation_signatures_allMethods <- filter(bsdb, 
        # get studies/signatures on Parkinson alone
        grepl(efo_id, `EFO ID`),
        # restrict search to Homo sapiens
@@ -512,14 +512,13 @@ bsdb_IBD_signatures_allMethods <- filter(bsdb,
        )
 ```
 
-```{r}
-createStudyTable2(bsdb_IBD_signatures_allMethods) %>% 
+```{r, eval=nrow(bsdb_constipation_signatures_allMethods) > 0}
+createStudyTable2(bsdb_constipation_signatures_allMethods) %>% 
   reactable(filterable = TRUE, searchable = TRUE)
 ```
 
-
-```{r}
-createTaxonTable(bsdb_IBD_signatures_allMethods) %>% 
+```{r, eval=nrow(bsdb_constipation_signatures_allMethods) > 0}
+createTaxonTable(bsdb_constipation_signatures_allMethods) %>% 
   filter(`Binomial Test pval` < 0.05) %>% 
   reactable(filterable = TRUE, searchable = TRUE)
 ```
