@@ -1,0 +1,116 @@
+---
+title: "Parkinson Meta-Analysis"
+author: "Giacomo Antonello"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+params:
+  data_type: "relative_abundance"
+---
+
+```{r setup}
+knitr::opts_chunk$set(
+  message = FALSE, 
+  warning = FALSE
+)
+
+library(mia) # Bioconductor
+library(tidyverse) # CRAN
+library(magrittr) # CRAN
+library(DT) # CRAN
+library(parkinsonsMetagenomicData) # remotes::install_github("ASAP-MAC/parkinsonsMetagenomicData")
+
+library(biobakeryUtils) # remotes::install("g-antonello/biobakeryUtils")
+```
+
+# Download microbiome data
+
+## PD studies processed with the nextflowMAC pipeline
+
+```{r}
+
+studies_processed <- read_tsv("https://raw.githubusercontent.com/ASAP-MAC/parkinsons_data_search/refs/heads/main/shotgun_samples/processed_datasets.tsv")
+
+studies_processed[,1:5] %>% 
+  relocate(`doi.org link`, .after = `Sequence Acc. code`) %>% 
+  datatable(
+    caption = paste("List of studies processed with the aim to include them in 
+                    the meta-analysis so far.",
+    "Analysis date:", 
+    Sys.Date()))
+
+country_per_study <- studies_processed %>% 
+  transmute(
+    study_name = case_when(
+      grepl("Boktor", `cMD proposed code`) ~ "BoktorJC_2023",
+      TRUE ~ `cMD proposed code`
+      ),
+    Country_ga = trimws(sapply(strsplit(`Country & geography`, ",|\\/"), function(x) x[length(x)]))
+  )
+
+```
+
+## See metadata of `parkinsonsMetagenomicData`
+
+```{r}
+metadata_datasets_available <- filter(sampleMetadata, 
+                                      # keep only studies listed above
+                                      study_name %in% studies_processed$`cMD proposed code`, 
+                                      # this removes data for which we have no information regarding health-disease status
+                                      !is.na(disease))
+
+metadata_datasets_available[, sapply(metadata_datasets_available, function(x) sum(is.na(x))/length(x)) < 0.1] %>% 
+  datatable()
+```
+
+## Download parkinsonsMetagenomicData for `r params$data_type`
+
+```{r, eval=params$data_type == "relative_abundance"}
+raw.tse <- returnSamples(data_type = params$data_type,
+                                            sample_data = metadata_datasets_available)
+
+# filter raw data so that there are only SGB level taxa, but also keep UNCLASSIFIED
+parkinsonsMetaAnalysisData.tse <- raw.tse[!is.na(rowData(raw.tse)$clade_name_terminal) | rownames(raw.tse) == "UNCLASSIFIED",]
+
+# make a fake taxonomy for UNCLASSIFIED 
+rownames(parkinsonsMetaAnalysisData.tse)[rownames(parkinsonsMetaAnalysisData.tse) == "UNCLASSIFIED"] <- paste0(names(all_taxonomy_levels), "UNCLASSIFIED", collapse = "|")
+
+# remove samples that failed sequencing (all-NA in the assay)
+parkinsonsMetaAnalysisData.tse <- parkinsonsMetaAnalysisData.tse[, !is.na(colSums(assay(parkinsonsMetaAnalysisData.tse)))]
+
+# stop if there are samples that don't sum to 100 at the 3rd digit, in the case of metaphlan data
+if(!(range(round(colSums(assay(parkinsonsMetaAnalysisData.tse)), 3)) == c(100, 100))){
+  error("Samples' relative abundances should sum to 100, +/- 1e-3 tolerance. Maybe some taxa were unwantingly removed?")
+}
+
+# make the rowData a little more human readable
+rowData_new.df <- rowData(parkinsonsMetaAnalysisData.tse) %>% 
+  as.data.frame() %>% 
+  dplyr::select(clade_name_kingdom:clade_name_terminal) %>% 
+  set_colnames(gsub("clade_name_", "", colnames(.))) %>% 
+  dplyr::rename(SGB = terminal) 
+
+rowData(parkinsonsMetaAnalysisData.tse) <- DataFrame(rowData_new.df)
+
+# shorten rownames of the .tse object. this also makes it work with the following function
+rownames(parkinsonsMetaAnalysisData.tse) <- str_extract(rownames(parkinsonsMetaAnalysisData.tse), "t__.*")
+
+# retrieve the phylogenetic tree for the chochophlan version used
+if(length(unique(colData(parkinsonsMetaAnalysisData.tse)$db_version)) == 1){
+  error("Samples were run with more than one CHOCOPhlAn reference database")
+}
+
+parkinsonsMetaAnalysisData.tse <- AddPhyloTree_to_mpa_tse(parkinsonsMetaAnalysisData.tse, CHOCOPhlAn_version = "202403")
+
+parkinsonsMetaAnalysisData.tse
+```
+
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+
