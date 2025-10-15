@@ -81,7 +81,7 @@ rownames(parkinsonsMetaAnalysisData.tse)[rownames(parkinsonsMetaAnalysisData.tse
 parkinsonsMetaAnalysisData.tse <- parkinsonsMetaAnalysisData.tse[, !is.na(colSums(assay(parkinsonsMetaAnalysisData.tse)))]
 
 # stop if there are samples that don't sum to 100 at the 3rd digit, in the case of metaphlan data
-if(!(range(round(colSums(assay(parkinsonsMetaAnalysisData.tse)), 3)) == c(100, 100))){
+if(!all.equal(range(round(colSums(assay(parkinsonsMetaAnalysisData.tse)), 3)) == c(100, 100))){
   error("Samples' relative abundances should sum to 100, +/- 1e-3 tolerance. Maybe some taxa were unwantingly removed?")
 }
 
