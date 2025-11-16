@@ -24,3 +24,6 @@ curatedmetagenomicdata-232f4a306d1d.json
 
 # Ignore the .Rproject objects
 .Rproj.user
+
+# ignore Macintosh DS_Store
+.DS_Store
