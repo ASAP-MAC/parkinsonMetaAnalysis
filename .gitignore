@@ -1,55 +1,26 @@
-# Data folder, which should stay local
-Data/
+# Ignore everything in the repository
+*
 
-# History files
-.Rhistory
-.Rapp.history
+# But DO NOT ignore directories, so we can recurse into them
+!*/
 
-# Session Data files
-.RData
-.RDataTmp
+# Now, whitelist the files formats to track
+!*.R
+!*.Rmd
+!*.rmd
+!*.Qmd
+!*.qmd
+!*.sh
+!*.md
 
-# User-specific files
-.Ruserdata
+# And track .gitignore
+!.gitignore
 
-# Example code in package build process
-*-Ex.R
-
-# Output files from R CMD build
-/*.tar.gz
-
-# Output files from R CMD check
-/*.Rcheck/
-
-# RStudio files
-.Rproj.user/
-
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
-
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
-
-# knitr and R markdown default cache directories
-*_cache/
-/cache/
-
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
-
-# R Environment Variables
-.Renviron
-
-# pkgdown site
-docs/
-
-# translation temp files
-po/*~
-
-# RStudio Connect folder
-rsconnect/
-
-# MAC cache files
+# ignore Macintosh's .DS_Store
 .DS_Store
+
+# ignore Google Cloud bucket authentication
+curatedmetagenomicdata-232f4a306d1d.json
+
+# Ignore the .Rproject objects
+.Rproj.user
