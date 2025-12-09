@@ -300,11 +300,11 @@ The vignette can be found at [curatedMetagenomicDataAnalyses](https://waldronlab
 
 Analysis choices:
 
-  - Transform: $\arcsin(\sqrt{relative~abundance})$
-  - Min prevalence: 5%
-  - Min 10 ppl per Case and 10 per control in each dataset
-  - Cohen D effect size standardization
-  - 
+-   Transform: $\arcsin(\sqrt{relative~abundance})$
+-   Min prevalence: 5%
+-   Min 10 ppl per Case and 10 per control in each dataset
+-   Cohen D effect size standardization
+-   
 
 ## Table of cases and controls in each study
 
@@ -340,7 +340,7 @@ cases_ctrls_vs_study_name_wider %>%
 
 ```
 
-## Filter input data to contain only acceptable studies and taxa with preval >= ``r params$prevalThresh`%`
+## Filter input data to contain only acceptable studies and taxa with preval \>= \``r params$prevalThresh`%\`
 
 ```{r}
 Input_filtered.tse <- Input.tse[,Input.tse@colData$study_name %in% study_names_usable]
@@ -512,7 +512,7 @@ legend_table <- Input_filtered.tse %>%
   mutate(study_label = 1:nrow(.), .before = study_name)
 
 
-taxonomyForestPlot <- biobakeryForestPlot(
+ForestPlot <- biobakeryForestPlot(
   meta_input = meta_analysis_results,
   StdEffSizes = cohenD.mtx %>% t,
   studies_Stats.df = legend_table, 
@@ -520,11 +520,11 @@ taxonomyForestPlot <- biobakeryForestPlot(
   featuresCol = "SGB") %>% 
   enrich_y_taxonomy_label(taxonomy.df = select(meta_analysis_results, Kingdom:SGB))
 
-forest_plot_with_legend <- ggarrange(forest_plot, ggtexttable(legend_table, rows = NULL), nrow = 1, widths = c(1, 0.5))
+ForestPlot_with_legend <- ggarrange(ForestPlot, ggtexttable(legend_table, rows = NULL), nrow = 1, widths = c(1, 0.5))
 
-invisible(sapply(c("png", "svg"), function(fmt) ggsave(plot = forest_plot, filename = sprintf("results/03_meta_analysis_SGB/ForestPlot_%s.%s", params$transform, fmt), dpi = 300, height = 8, width = 8)))
+invisible(sapply(c("png", "svg"), function(fmt) ggsave(plot = ForestPlot_with_legend, filename = sprintf("results/03_meta_analysis_SGB/ForestPlot_%s.%s", params$transform, fmt), dpi = 300, height = 8, width = 14)))
 
-forest_plot_with_legend
+ForestPlot_with_legend
 ```
 
 # To what extent are PD and constipation confounding each other?
@@ -573,7 +573,7 @@ bluePoo_C4.vs.C23 <- openxlsx::read.xlsx("Data/bluePoo/gutjnl-2020-323877supp005
 
 ```{r, fig.height=6, fig.width=9, fig.cap="Comparison of scaled meta-effect sizes in parkinsonsMetagenomicData compared to features reported in the Blue Poo study (Asnicar 2021, Gut). Class 4 (constipated) was compared to scores 2 and 3 (normal transit)"}
 datasets_together.list <- list(
-  bluePoo = bluePoo_C4.vs.C1,
+  bluePoo = bluePoo_C4.vs.C23,
   metaAnalysis = PD_meta_analysis_GA
 )
 
@@ -622,11 +622,8 @@ plotPanel
 
 # Blue Poo - ongoing harmonization
 
-  1. Same analysis pipeline 
-  2. Metadata retrieved. useful metadata items are:
-    - bowel_movements_last_7_days
-    - bristol_stool_score_average_last_3_months
-    - transit time (days)
+1.  Same analysis pipeline
+2.  Metadata retrieved. useful metadata items are: - bowel_movements_last_7_days - bristol_stool_score_average_last_3_months - transit time (days)
 
 # Future work
 

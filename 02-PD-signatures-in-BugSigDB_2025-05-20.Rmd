@@ -24,6 +24,7 @@ knitr::opts_chunk$set(
 ```
 
 ```{r}
+
 # data manipulation packages
 library(tidyverse)
 library(magrittr)
@@ -33,7 +34,7 @@ library(reactable)
 library(kableExtra)
 
 # data visualization packages
-library(pheatmap)
+library(ComplexHeatmap)
 library(ggpubr)
 library(plotly)
 
@@ -73,14 +74,19 @@ different cases and controls.
 
 ```{r}
 
-bsdb <- importBugSigDB(cache=FALSE)
+bsdb <- importBugSigDB(version = "10.5281/zenodo.15272273", cache=FALSE)
 
 bsdb_PD_signatures_allMethods <- filter(bsdb, 
        # get studies/signatures on Parkinson alone
        grepl(efo_id, `EFO ID`),
        # restrict search to Homo sapiens
        `Host species` == host
-       )
+       ) %>% 
+  # fix taxa names in case k__ is duplicated because of some weird
+  # changes found on May 20 2025
+  mutate(
+    `MetaPhlAn taxon names` = lapply(`MetaPhlAn taxon names`, function(x) gsub("|k__", "_", x = x, fixed = TRUE))
+  )
 
 # fix typo of feces,blood
 
@@ -98,26 +104,22 @@ bsdb_PD_signatures_allMethods$Continent <- strsplit(bsdb_PD_signatures_allMethod
       }) %>%  
   sapply(paste, collapse = ",")
 
-source(file = "~/Desktop/bugSigSimple_upgrade.R")
-
 # custom, more expanded createStudyTable function
-studies_table_clean <- createStudyTable2(bsdb_PD_signatures_allMethods, rows_are = "experiments", includeAlso = c("Sequencing type", "Sequencing platform"))
+studies_table_clean <- createStudyTable(bsdb_PD_signatures_allMethods)
 
 studies_table_clean %>% 
   reactable(filterable = TRUE, searchable = TRUE)
 ```
 
-Below the summary function as currently implemented in bugSigSimple
-
-```{r}
-createStudyTable(bsdb_PD_signatures_allMethods) %>% 
-  reactable(filterable = TRUE)
-```
-
 # Some statistics of studies included (For CRN meeting)
 
 ```{r}
-# NUmber of studies per year
+dir.create("results/02_BugSigDB_PD", showWarnings = FALSE, recursive = TRUE)
+```
+
+
+```{r}
+# Number of studies per year
 
 studies_per_year <- bsdb_PD_signatures_allMethods %>% select(PMID, Year) %>% distinct() %>% .$Year %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% set_colnames(c("Year of Publication", "Number of Studies")) 
 
@@ -127,7 +129,7 @@ years_barplot <- ggplot(studies_per_year, aes(x = `Year of Publication`, y = `Nu
   theme_light() +
   scale_y_continuous(breaks = 1:10)
 
-ggsave(filename = "~/Desktop/CRN_MEETING/studies_per_year.png", plot =  years_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
+ggsave(filename = "results/02_BugSigDB_PDstudies_per_year.png", plot =  years_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
 
 # Body sites 
 
@@ -139,7 +141,7 @@ bodySite_barplot <- ggplot(bodySites, aes(x = reorder(`Body Site`, - `Number of 
   theme_light() +
   theme(axis.text.x = element_text(angle = -90, hjust = 0), axis.title.x = element_blank())
 
-ggsave(filename = "~/Desktop/CRN_MEETING/BodySites.png", plot = bodySite_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
+ggsave(filename = "results/02_BugSigDB_PDBodySites.png", plot = bodySite_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
 
 # Census methods 
 
@@ -151,7 +153,7 @@ censusMethods_barplot <- ggplot(censusMethods, aes(x = reorder(`Census Method`, 
   theme_light() +
   theme(axis.title.x = element_blank())
 
-ggsave(filename = "~/Desktop/CRN_MEETING/CensusMethods.png", plot = censusMethods_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
+ggsave(filename = "results/02_BugSigDB_PDCensusMethods.png", plot = censusMethods_barplot, height = 4, width = 5, dpi = 300, bg = "transparent")
 
 # Census methods 
 
@@ -173,7 +175,7 @@ location_barplot <- ggplot(location.df, aes(x = reorder(`Location of subjects`, 
   theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0.5), axis.title.x = element_blank())
   
 
-ggsave(filename = "~/Desktop/CRN_MEETING/GeographicDistribution.png", plot = location_barplot, height = 5, width = 5, dpi = 300, bg = "transparent")
+ggsave(filename = "results/02_BugSigDB_PDGeographicDistribution.png", plot = location_barplot, height = 5, width = 5, dpi = 300, bg = "transparent")
 
 ggarrange(
   years_barplot, censusMethods_barplot,
@@ -197,10 +199,12 @@ more disproportionate two groups, the more significant the test is.
 ## All studies
 
 ```{r}
-tmp <- createTaxonTable(bsdb_PD_signatures_allMethods, Inf) %>% 
+tmp <- createTaxonTable(bsdb_PD_signatures_allMethods, 80) %>% 
   filter(`Binomial Test pval` < 0.05) %>% 
   kbl(caption = "Number of significant signatures as found in BugSigDB. Significance is defined as binomial test p-value less than 0.05. Signautres were extracted using bugSigSimple::createTaxonTable") %>% 
   kable_styling()
+
+tmp
 ```
 
 ## Studies split by `Sequencing type` 
@@ -211,7 +215,7 @@ signautres_per_body_site <- bsdb_PD_signatures_allMethods %>%
   mutate(`Sequencing type` = ifelse(`Sequencing type` == "Feces,Blood", "Blood,Feces", `Sequencing type`)) %>% 
 split.data.frame(f = .$`Sequencing type`) %>% 
   # in the list of each body site, report all possible signatures
-  lapply(function(x) tryCatch(createTaxonTable(x, n = Inf), error = function(e) return(NULL))) %>% 
+  lapply(function(x) tryCatch(createTaxonTable(x, n = 80), error = function(e) return(NULL))) %>% 
   .[!sapply(., is.null)] %>%
   lapply(dplyr::filter, `Binomial Test pval` < 0.05)
 
@@ -286,8 +290,9 @@ We are mostly interested in shotgun sequencing studies, as they are more
 comparable across studies.
 
 ```{r}
-studies_table_clean %>% 
+bsdb_PD_signatures_allMethods %>% 
   filter(`Sequencing type` == "WMS") %>% 
+  createStudyTable() %>% 
   reactable(filterable = TRUE)
 ```
 
@@ -300,8 +305,7 @@ createTaxonTable(bsdb_PD_signatures_splitMethods$WMS, n= 20) %>%
   kable_styling()
 ```
 
-```{r}
-
+```{r, eval=FALSE}
 tmp <- bsdb_PD_signatures_splitMethods$WMS %>% 
   mutate(signatureSplit = paste(`MetaPhlAn taxon names`, collapse = ";")) %>% 
   separate_rows(`MetaPhlAn taxon names`, sep = ";") %>% 
@@ -316,29 +320,37 @@ tmp <- bsdb_PD_signatures_splitMethods$WMS %>%
   select(taxaNames, FirstAuth, incr_decr) %>% 
   distinct() 
 
-#' Manually remove Clostridiaceae family increase in Rosario D, which 
-#' causes a conflict AND is only found increased in PD, in the paper
-tmp %<>% 
-  filter(!(FirstAuth == "Rosario D" & incr_decr == -1 & grepl("Clostridiaceae", taxaNames)))
+# there are some inconsistencies in the data, see 
+inconsistencies <- tmp %>%
+  group_by(taxaNames, FirstAuth) %>%
+  filter(n() > 1) %>%
+  arrange(taxaNames)
 
-tmp_wide <- pivot_wider(tmp, names_from = "FirstAuth", values_from = "incr_decr") %>% 
-  column_to_rownames("taxaNames")
-
-rownames(tmp_wide) <- str_split(rownames(tmp_wide), "\\|") %>% sapply(function(x) x[length(x)])
-
-tmp_wide[is.na(tmp_wide)] <- 0
-
-tmp_wide %>% 
-pheatmap(legend_breaks = c(-1, 0, 1), legend_labels = c("Decreased", "NA/Unchanged", "Increased"), angle_col = 315)
-
+inconsistencies
 ```
 
+For now, we will ignore these entries, in the future we may open an issue.
+
+```{r}
+tmp_fixed_inconsistencies_wide <- tmp %>% 
+  filter(!((taxaNames %in% inconsistencies$taxaNames) & (FirstAuth %in% inconsistencies$FirstAuth))) %>% 
+  pivot_wider(names_from = FirstAuth, values_from = "incr_decr", values_fill = 0) %>% 
+  column_to_rownames("taxaNames") %>% 
+  as.matrix()
+
+tmp_fixed_inconsistencies_wide %>% 
+ComplexHeatmap::Heatmap(col = c("navy", "white", "red2"), rect_gp = gpar(col= "gray"))
+
+```
 
 Heatmap of signatures in the same direction in at least 2 studies
 
 ```{r}
-tmp_wide[rowSums(abs(tmp_wide)) > 2,] %>% 
-pheatmap(legend_breaks = c(-1, 0, 1), legend_labels = c("Decreased", "NA/Unchanged", "Increased"), angle_col = 315)
+
+tmp_fixed_inconsistencies_wide[rowSums(abs(tmp_fixed_inconsistencies_wide)) > 2,] %>% 
+  #pheatmap(legend_breaks = c(-1, 0, 1), legend_labels = c("Decreased", "NA/Unchanged", "Increased"), angle_col = 315,border_color = "gray")
+  ComplexHeatmap::Heatmap(col = c("navy", "white", "red2"), rect_gp = gpar(col= "gray"))
+  
 ```
 
 As can be seen, most signatures are unique to the study. This is due to the typical
@@ -407,7 +419,47 @@ ggVennDiagram::ggVennDiagram(list("Giacomo" = shotgun_curated_studies_GA$`doi.or
   - The `createStudyTable` is a nice function but could be expanded, maybe to
   include more options, while leaving a default. 
   **I"m working on a GitHub issue or feature request**
+
+# How strong is PD's signatures in BugSigDB?
+
+```{r}
+top10_conditions <- head(sort(table(bsdb$Condition), decreasing = TRUE), 10)
+
+top10_conditions_compared.df <- sapply(names(top10_conditions), function(cond) {
+  bsdb_subset <- filter(bsdb, 
+                        # get studies/signatures on Parkinson alone
+                        Condition == cond,
+                        # restrict search to Homo sapiens
+                        `Host species` == host
+  ) %>% 
+    # fix taxa names in case k__ is duplicated because of some weird
+    # changes found on May 20 2025
+    mutate(
+      `MetaPhlAn taxon names` = lapply(`MetaPhlAn taxon names`, function(x) gsub("|k__", "_", x = x, fixed = TRUE))
+    )
   
+  N_signatures <- getSignatures(bsdb_subset) %>% length()
+  N_signif_taxa <- nrow(createTaxonTable(bsdb_subset, 50) %>% filter(`Binomial Test pval` < 0.05))
+  N_studies <- nrow(createStudyTable(bsdb_subset))
+  return(c(N_studies, N_signatures, N_signif_taxa))
+}) %>% magrittr::set_rownames(c("N. studies", "N. signatures", "N. signif. taxa")) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  
+mutate(ntaxa_by_n_study = round(`N. signif. taxa`/`N. studies`, 4),
+         ntaxa_by_n_sign = round(`N. signif. taxa`/`N. signatures`, 4))
+
+DT::datatable(top10_conditions_compared.df,
+            extensions = 'Buttons',
+  options = list(
+    dom = 'Bfrtip', # 'B' places the buttons
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print')
+  ))
+
+
+```
+
+
 # IBS signatures in BugSigDB
 
 ```{r}
@@ -469,7 +521,7 @@ bsdb_IBD_signatures_allMethods <- filter(bsdb,
 ```
 
 ```{r}
-createStudyTable2(bsdb_IBD_signatures_allMethods) %>% 
+createStudyTable(bsdb_IBD_signatures_allMethods) %>% 
   reactable(filterable = TRUE, searchable = TRUE)
 ```
 
@@ -502,7 +554,6 @@ cbind(c("Condition", "EFO ID", "Host species"), c(condition_of_interest, efo_id,
   kable_styling()
 ```
 
-
 ```{r}
 bsdb_constipation_signatures_allMethods <- filter(bsdb, 
        # get studies/signatures on Parkinson alone
@@ -513,7 +564,7 @@ bsdb_constipation_signatures_allMethods <- filter(bsdb,
 ```
 
 ```{r, eval=nrow(bsdb_constipation_signatures_allMethods) > 0}
-createStudyTable2(bsdb_constipation_signatures_allMethods) %>% 
+createStudyTable(bsdb_constipation_signatures_allMethods) %>% 
   reactable(filterable = TRUE, searchable = TRUE)
 ```
 
@@ -521,5 +572,11 @@ createStudyTable2(bsdb_constipation_signatures_allMethods) %>%
 createTaxonTable(bsdb_constipation_signatures_allMethods) %>% 
   filter(`Binomial Test pval` < 0.05) %>% 
   reactable(filterable = TRUE, searchable = TRUE)
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
 ```
 

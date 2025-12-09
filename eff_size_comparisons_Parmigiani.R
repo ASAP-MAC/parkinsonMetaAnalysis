@@ -1,8 +1,9 @@
 # plot 1 constipation BluePoo 
+setwd(dir = here::here())
 library(tidyverse)
 theme_set(theme_light())
 # this is metaphalan 3
-bluePoo_C4.vs.C1 <- openxlsx::read.xlsx("~/Downloads/gutjnl-2020-323877supp005.xlsx", sheet = 1) %>%
+bluePoo_C4.vs.C1 <- openxlsx::read.xlsx("~/Downloads/gutjnl-2020-323877supp005_data_supplement.xlsx", sheet = 3) %>%
   transmute(
     Species = gsub("s__", "", str_extract(Taxonomy, "s__.*")),
     Beta.bluePoo = -Effect.size,
@@ -19,23 +20,22 @@ PD_meta_analysis_GA <- read_tsv("~/Documents/git_repos/parkinsonMetaAnalysis/res
 
 # DoD constipation in healthy controls
 # this is metaphlan 3
-haydeh_constipation_healthy <- read_tsv("~/Downloads/constipation_controls_BirminghamAL.tsv") %>% 
-  filter(grepl("Constipation", metadata)) %>% 
+constipation_adj_PD_payami <- openxlsx::read.xlsx("~/Downloads/DoD.NGRC.UAB_metaAnalysis_MWAS_Constip_adj.PD_2025Jun13.xlsx", startRow = 2) %>% 
   transmute(
-    Species = gsub("s__", "", feature),
-    Beta.NHC_constipated = coef,
-    FDR.NHC_constipated = qval
+    Species = Species,
+    Beta_constipated = Beta,
+    FDR_constipated = FDR
   )
 
 datasets_together.list <- list(
   bluePoo = bluePoo_C4.vs.C1,
   metaAnalysis = PD_meta_analysis_GA,
-  NHC_constipated = haydeh_constipation_healthy
+  constipated_adj_PD = constipation_adj_PD_payami
 )
 
 venn_plot_species_tested <- ggVennDiagram::ggVennDiagram(lapply(datasets_together.list, "[[", "Species"))
 
-datasets_together.df <- reduce(datasets_together.list, full_join, by = "Species")
+datasets_together.df <- purrr::reduce(datasets_together.list, dplyr::full_join, by = "Species")
 rownames(datasets_together.df) <- datasets_together.df$Species
 
 scatterplot_betas_metaAnalysis.vs.bluePoo <- ggplot(datasets_together.df, aes(x = Beta.metaAnalysis, y = Beta.bluePoo)) + 
@@ -48,7 +48,7 @@ scatterplot_betas_metaAnalysis.vs.bluePoo <- ggplot(datasets_together.df, aes(x 
     caption= "Correlation: Pearson"
   )
 
-scatterplot_betas_bluePoo.vs.NHC_healthy <- ggplot(datasets_together.df, aes(x = Beta.bluePoo, y = Beta.NHC_constipated)) + 
+scatterplot_betas_bluePoo.vs.NHC_healthy <- ggplot(datasets_together.df, aes(x = Beta.bluePoo, y = Beta_constipated)) + 
   geom_point(color = "darkgray") + 
   geom_abline(slope = 1, intercept = 0, color = "red") +
   geom_hline(yintercept = 0, color = "black", lty = "dashed") + 
@@ -58,7 +58,7 @@ scatterplot_betas_bluePoo.vs.NHC_healthy <- ggplot(datasets_together.df, aes(x =
     caption= "Correlation: Pearson"
   )
 
-scatterplot_betas_metaAnalysis.vs.NHC_healthy <- ggplot(datasets_together.df, aes(x = Beta.metaAnalysis, y = Beta.NHC_constipated)) + 
+scatterplot_betas_metaAnalysis.vs.NHC_healthy <- ggplot(datasets_together.df, aes(x = Beta.metaAnalysis, y = Beta_constipated)) + 
   geom_point(color = "darkgray") + 
   geom_abline(slope = 1, intercept = 0, color = "red") +
   geom_hline(yintercept = 0, color = "black", lty = "dashed") + 
@@ -71,7 +71,7 @@ scatterplot_betas_metaAnalysis.vs.NHC_healthy <- ggplot(datasets_together.df, ae
 
 plotPanel <- ggarrange(venn_plot_species_tested, scatterplot_betas_metaAnalysis.vs.bluePoo, scatterplot_betas_bluePoo.vs.NHC_healthy, scatterplot_betas_metaAnalysis.vs.NHC_healthy, labels = "AUTO")
 
-ggsave(plot = plotPanel, filename = "~/Desktop/Constipation_vs_PD.pdf", width = 10, height = 10, units = "in")
+ggsave(plot = plotPanel, filename = "OneDrive - CUNY/git_repos/parkinsonMetaAnalysis/Figures/ParmigianiG_Constipation_vs_PD.svg", width = 12, height = 10, units = "in")
 plotPanel
 
 

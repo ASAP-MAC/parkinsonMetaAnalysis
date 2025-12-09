@@ -27,10 +27,10 @@ theme_set(theme_bw())
 
 # `limma` produces almost identical statistics as `lm` but it's more efficient
 
-  - Dataset: WallenZD_2022
-  - transformation: $arcsin(\sqrt{relative~abundance}$
-  - limma used directly with lmFit, no voom transformation applied
-  
+-   Dataset: WallenZD_2022
+-   transformation: $arcsin(\sqrt{relative~abundance}$
+-   limma used directly with lmFit, no voom transformation applied
+
 ```{r}
 wallenZD_2022_raw.tse <- sampleMetadata %>% 
   filter(study_name == "WallenZD_2022") %>% 
@@ -45,7 +45,7 @@ wallenZD_2022.tse <- transformAssay(wallenZD_2022.tse, assay.type = "relabundanc
 assay(wallenZD_2022.tse, "asin_sqrt") <- sqrt(assay(wallenZD_2022.tse, "hellinger"))
 ```
 
-## lm calculation
+## `lm` calculation
 
 ```{r}
 moltenAssay.df <- meltSE(wallenZD_2022.tse, assay.type ="asin_sqrt", add.col = c("control", "age", "sex"))
@@ -141,3 +141,45 @@ rbind(
   mutate(Implementation = c("lm", "limma", "lm/limma")) %>% 
   relocate(Implementation)
 ```
+
+
+# 5% prevalence cutoff per dataset or across all, what is the effect?
+
+```{r}
+MetaPhlAn.tse <- read_TSE_from_dir("../Data/MetaPhlAn_relative_abundance.tse/")
+
+MetaPhlAn.tse
+```
+
+```{r}
+# taxa that survive 5% overall 
+FullDatasetPreval <- getPrevalence(MetaPhlAn.tse)
+
+perdataset_5_percent <- MetaPhlAn.tse %>% 
+  splitOn(group = "study_name") %>% 
+  sapply(function(x)getPrevalence(x)) 
+
+prevalences_mtx <- cbind(FullDatasetPreval, perdataset_5_percent)
+
+pheatmap::pheatmap(prevalences_mtx, show_rownames = FALSE)
+
+```
+
+Features with at least 5% prevalence in each dataset or overall:
+
+```{r}
+colSums(prevalences_mtx >= 0.05)
+```
+
+Features that are ALWAYS tested:
+
+```{r}
+sum(rowSums(prevalences_mtx >= 0.05) == ncol(prevalences_mtx))
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+

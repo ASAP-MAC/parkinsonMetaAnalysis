@@ -5,9 +5,12 @@ date: "`r Sys.Date()`"
 format: 
   html:
     embed-resources: true
+    toc: true
+    toc-depth: 2
 editor: visual
 params:
   data_type: "relative_abundance"
+  overwrite_output: "yes"
 ---
 
 ```{r setup}
@@ -60,57 +63,98 @@ metadata_datasets_available <- filter(sampleMetadata,
                                       study_name %in% studies_processed$`cMD proposed code`, 
                                       # this removes data for which we have no information regarding health-disease status
                                       !is.na(disease))
-
 metadata_datasets_available[, sapply(metadata_datasets_available, function(x) sum(is.na(x))/length(x)) < 0.1] %>% 
   datatable()
 ```
 
+### write uuids as simple text file
+
+```{r}
+writeLines(metadata_datasets_available$uuid, "Data/uuid_available.txt")
+```
+
+## Available downloadable data types
+
+```{r}
+datatable(parkinsonsMetagenomicData::biobakery_files())
+```
+
 ## Download parkinsonsMetagenomicData for `r params$data_type`
 
-```{r, eval=params$data_type == "relative_abundance"}
+```{r, eval=params$data_type != "genefamilies_unstratified"}
 raw.tse <- returnSamples(data_type = params$data_type,
                                             sample_data = metadata_datasets_available)
 
-# filter raw data so that there are only SGB level taxa, but also keep UNCLASSIFIED
-parkinsonsMetaAnalysisData.tse <- raw.tse[!is.na(rowData(raw.tse)$clade_name_terminal) | rownames(raw.tse) == "UNCLASSIFIED",]
-
-# make a fake taxonomy for UNCLASSIFIED 
-rownames(parkinsonsMetaAnalysisData.tse)[rownames(parkinsonsMetaAnalysisData.tse) == "UNCLASSIFIED"] <- paste0(names(all_taxonomy_levels), "UNCLASSIFIED", collapse = "|")
-
-# remove samples that failed sequencing (all-NA in the assay)
-parkinsonsMetaAnalysisData.tse <- parkinsonsMetaAnalysisData.tse[, !is.na(colSums(assay(parkinsonsMetaAnalysisData.tse)))]
-
-# stop if there are samples that don't sum to 100 at the 3rd digit, in the case of metaphlan data
-if(!all.equal(range(round(colSums(assay(parkinsonsMetaAnalysisData.tse)), 3)) == c(100, 100))){
-  error("Samples' relative abundances should sum to 100, +/- 1e-3 tolerance. Maybe some taxa were unwantingly removed?")
-}
-
-# make the rowData a little more human readable
-rowData_new.df <- rowData(parkinsonsMetaAnalysisData.tse) %>% 
-  as.data.frame() %>% 
-  dplyr::select(clade_name_kingdom:clade_name_terminal) %>% 
-  set_colnames(gsub("clade_name_", "", colnames(.))) %>% 
-  dplyr::rename(SGB = terminal) 
-
-rowData(parkinsonsMetaAnalysisData.tse) <- DataFrame(rowData_new.df)
-
-# shorten rownames of the .tse object. this also makes it work with the following function
-rownames(parkinsonsMetaAnalysisData.tse) <- str_extract(rownames(parkinsonsMetaAnalysisData.tse), "t__.*")
-
-# retrieve the phylogenetic tree for the chochophlan version used
-if(length(unique(colData(parkinsonsMetaAnalysisData.tse)$db_version)) == 1){
-  error("Samples were run with more than one CHOCOPhlAn reference database")
-}
-
-parkinsonsMetaAnalysisData.tse <- AddPhyloTree_to_mpa_tse(parkinsonsMetaAnalysisData.tse, CHOCOPhlAn_version = "202403")
-
-parkinsonsMetaAnalysisData.tse
+# enhance data 
+parkinsonsMetaAnalysisData.tse <- pMD_enhance(input.tse = raw.tse, data_type = params$data_type, sampleMetadata.df = metadata_datasets_available)
 ```
 
+```{r, eval=params$data_type == "relative_abundance"}
+parkinsonsMetaAnalysisData.tse <- AddPhyloTree_to_mpa_tse(parkinsonsMetaAnalysisData.tse, CHOCOPhlAn_version = "202403")  
+```
+
+```{r, eval=params$data_type == "genefamilies_unstratified"}
+# parquet_raw <- arrow::read_parquet(
+#   file = "~/Downloads/genefamilies_unstratified_uuid.parquet", col_select = c("gene_family","rpk_abundance", "uuid")
+#   )
+library(arrow)
+file.pq <- open_dataset("~/Downloads/genefamilies_unstratified_uuid.parquet", )
+
+file_filt.pq <- file.pq %>%
+  filter(uuid %in% metadata_datasets_available$uuid) %>%
+  collect()
+
+# code below crashes due to too much memory used
+# data_matrix <- reshape2::acast(file_filt.pq, rpk_abundance ~ gene_family ~ uuid)
+data_matrix <- pivot_wider(
+  file_filt.pq, 
+  names_from = c("gene_family", "uuid"), 
+  values_from = "rpk_abundance"
+  )
+# parquet_raw <- nanoparquet::read_parquet(
+#   file = "~/Downloads/genefamilies_unstratified_uuid.parquet", 
+#   col_select = c("gene_family","rpk_abundance", "uuid"), 
+#   )
+
+
+parquet_raw <- data.table::as.data.table(parquet_raw)
+parquet__subset <- parquet_raw[uuid %in% metadata_] %>%
+  filter(uuid %in% metadata_datasets_available$uuid)
+
+
+raw.tse <- returnSamples(data_type = "genefamilies_unstratified",
+                                            sample_data = metadata_datasets_available, 
+                         local_files = "~/Downloads/genefamilies_unstratified_uuid.parquet")
+
+tse_intermediate <- pMD_enhance(input.tse = raw.tse, data_type = params$data_type)
+```
+
+## Add curated information about the Country of the participants/samples
+
+```{r}
+country_per_study.chr <- country_per_study$Country_ga
+names(country_per_study.chr) <- country_per_study$study_name
+
+parkinsonsMetaAnalysisData.tse@colData$Country_ga <- country_per_study.chr[parkinsonsMetaAnalysisData.tse@colData$study_name]
+```
+
+## Write results
+
+```{r, message=TRUE}
+nameSuffix <- paste(parkinsonsMetagenomicData::biobakery_files()$tool[parkinsonsMetagenomicData::biobakery_files()$data_type == params$data_type], params$data_type, sep = "_")
+fullOutName <- sprintf("Data/%s.tse", nameSuffix)
+
+if(params$overwrite_output == "yes"){
+  unlink(fullOutName, recursive = TRUE)
+}
+
+write_TSE_to_dir(parkinsonsMetaAnalysisData.tse, out.dir = fullOutName)
+
+message(sprintf("Data saved in: %s", fullOutName))
+```
 
 # Session Info
 
 ```{r}
 sessionInfo()
 ```
-

@@ -303,10 +303,10 @@ The vignette can be found at [curatedMetagenomicDataAnalyses](https://waldronlab
 
 Analysis choices:
 
-  - Transform: $\arcsin(\sqrt{relative~abundance})$
-  - Min prevalence: 5%
-  - Min 10 ppl per Case and 10 per control in each dataset
-  - Cohen D effect size standardization
+-   Transform: $\arcsin(\sqrt{relative~abundance})$
+-   Min prevalence: 5%
+-   Min 10 ppl per Case and 10 per control in each dataset
+-   Cohen D effect size standardization
 
 ## Table of cases and controls in each study
 
@@ -342,7 +342,7 @@ cases_ctrls_vs_study_name_wider %>%
 
 ```
 
-## Filter input data to contain only acceptable studies and taxa with preval >= ``r params$prevalThresh`%`
+## Filter input data to contain only acceptable studies and taxa with preval \>= \``r params$prevalThresh`%\`
 
 ```{r}
 Input_filtered.tse <- Input.tse[,Input.tse@colData$study_name %in% study_names_usable]
@@ -531,7 +531,6 @@ invisible(sapply(c("png", "svg"), function(fmt) ggsave(plot = forest_plot_with_l
 
 forest_plot_with_legend
 ```
-
 
 # Session Info
 
