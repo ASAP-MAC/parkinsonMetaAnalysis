@@ -507,7 +507,7 @@ legend_table <- Input_filtered.tse %>%
   colData %>% 
   as_tibble %>% 
   group_by(study_name) %>% 
-  reframe(N = n(), PD = sum(Parkinson_1_0 == 1), Control = sum(Parkinson_1_0 == 1)) %>% 
+  reframe(N = n(), PD = sum(Parkinson_1_0 == 1), Control = sum(Parkinson_1_0 == 0)) %>% 
   arrange(desc(N)) %>% 
   mutate(study_label = 1:nrow(.), .before = study_name)
 
